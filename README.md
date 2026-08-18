@@ -30,15 +30,58 @@ dsh plugin add npm:dsh-model-pro
 
 ### Manual activation
 
-This plugin can also run as a dynamic Cordis plugin inside a DSH session. Use `cordis_define` with the Host and Client halves, then `cordis_run` to activate.
+This plugin can also run as a dynamic Cordis plugin inside a DSH session. Use `cordis_define` with the Host and Client halves from `dist/`, then `cordis_run` to activate.
 
-### Host half
+### Build from source
 
-The `host.js` file contains the Host-side plugin code that registers `harness.handle` RPC handlers for all provider operations.
+```sh
+git clone https://github.com/wqy8593521/dsh-model-pro.git
+cd dsh-model-pro
+npm install
+npm run build      # outputs dist/host.js + dist/client.js
+```
 
-### Client half
+### Project structure
 
-The `client.js` file contains the Client-side plugin code that registers a `settings.section` Slot rendering the Model Pro settings page.
+```
+src/
+├── shared/
+│   ├── constants.ts          # NS, PROTOS, EDITABLE_FIELDS
+│   └── types.ts              # shared TypeScript interfaces
+├── host/
+│   ├── index.ts              # apply(ctx) — registers all harness.handle
+│   ├── utils.ts              # makeHostPlain, readProviders, writeSection
+│   └── handlers/              # one file per RPC handler
+│       ├── list.ts           # list-providers
+│       ├── toggle.ts          # toggle-provider
+│       ├── get.ts             # get-provider
+│       ├── discover.ts        # discover-models
+│       ├── create.ts          # create-provider
+│       ├── delete.ts          # delete-provider
+│       ├── updateField.ts     # update-field
+│       ├── updateHeaders.ts   # update-headers
+│       └── applyModels.ts     # apply-models
+├── client/
+│   ├── index.tsx             # apply(ctx) — registers settings.section Slot
+│   ├── i18n.ts               # ZH / EN dictionaries
+│   ├── styles.ts              # CSS string
+│   ├── rpc.ts                 # call() wrapper
+│   ├── react.ts               # React global shim
+│   └── components/
+│       ├── ModelProPage.tsx    # list view
+│       ├── ProviderCard.tsx    # provider card
+│       ├── CreateForm.tsx      # new-provider form
+│       ├── ProviderEditor.tsx  # tabbed editor
+│       ├── InfoPanel.tsx       # info tab
+│       ├── HeadersPanel.tsx    # headers tab
+│       └── ModelsPanel.tsx     # models tab
+├── dist/                      # build output (gitignored)
+│   ├── host.js
+│   └── client.js
+├── tsconfig.json
+├── tsup.config.ts
+└── package.json
+```
 
 ## How it works
 
@@ -50,12 +93,14 @@ Disabling a provider moves its entire config from `llm-pi-ai.providers` to `llm-
 
 The Host half uses a `makeHostPlain()` helper that recursively rebuilds all objects with `Object.create(null)` (null prototype), ensuring they pass the `dsh-settings` `isPlainObject` check across the vm sandbox realm boundary.
 
-## Files
+### Build system
+
+TypeScript source is compiled with [tsup](https://tsup.egoist.dev/) (esbuild) into single-file IIFE bundles. Each output is a self-contained JS file with no `require`/`import` — ready for the Cordis sandbox.
 
 | File | Description |
 |------|-------------|
-| `host.js` | Host-side plugin code (RPC handlers) |
-| `client.js` | Client-side plugin code (Settings UI) |
+| `dist/host.js` | Host-side bundle (RPC handlers) |
+| `dist/client.js` | Client-side bundle (Settings UI) |
 | `cordis.patch.yml` | Cordis composition patch for `dsh plugin add` |
 | `package.json` | npm package metadata with `dsh.bundle` manifest |
 

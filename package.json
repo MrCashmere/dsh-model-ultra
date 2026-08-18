@@ -2,8 +2,11 @@
   "name": "dsh-model-pro",
   "version": "1.0.1",
   "description": "Model Pro — DSH plugin for llm-pi-ai provider lifecycle management: create/delete/edit providers, custom HTTP headers, enable/disable, batch model discovery with select-all/invert",
-  "main": "host.js",
+  "main": "dist/host.js",
   "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
     "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [
@@ -29,12 +32,17 @@
   },
   "homepage": "https://github.com/wqy8593521/dsh-model-pro#readme",
   "files": [
-    "host.js",
-    "client.js",
+    "dist",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "tsup": "^8",
+    "typescript": "^5"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

@@ -1,3 +1,10 @@
 .git
+.github
 .gitignore
 .npmignore
+src
+node_modules
+tsconfig.json
+tsup.config.ts
+scripts
+CHANGELOG.md
