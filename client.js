@@ -1,3 +1,8 @@
+// dsh-model-pro — Client half
+// Registers a settings.section Slot that renders the Model Pro settings page.
+// UI: card-based provider list + tabbed editor (Info / Headers / Models).
+// All data operations go through host.call() RPC to the Host half.
+
 const NS = 'settings.dsh-model-pro'
 var ZH = {
   nav: '模型 Pro', title: '模型 Pro',
