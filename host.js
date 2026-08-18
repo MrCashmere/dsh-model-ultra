@@ -1,3 +1,10 @@
+// dsh-model-pro — Host half
+// Provides RPC handlers for llm-pi-ai provider lifecycle management.
+// All handlers are registered via harness.handle() and called by the Client half.
+//
+// Key design: disabled providers are moved to a separate `disabledProviders` dict
+// so the llm-pi-ai adapter (which only reads `providers`) stops registering them.
+
 const NS = 'llm-pi-ai'
 const PROTOS = ['openai-completions', 'openai-responses', 'anthropic-messages']
 
