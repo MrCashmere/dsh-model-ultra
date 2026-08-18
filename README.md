@@ -53,6 +53,16 @@ The Host half uses a `makeHostPlain()` helper that recursively rebuilds all obje
 |------|-------------|
 | `host.js` | Host-side plugin code (RPC handlers) |
 | `client.js` | Client-side plugin code (Settings UI) |
+| `cordis.patch.yml` | Cordis composition patch for `dsh plugin add` |
+| `package.json` | npm package metadata with `dsh.bundle` manifest |
+
+## Screenshots
+
+The Model Pro settings page provides:
+
+- **List view**: provider cards with status dots (active/disabled/catalog), type tags, and inline actions (edit/enable/disable/delete)
+- **Editor view**: tabbed interface with Info / Headers / Models panels
+- **Model discovery**: fetch remote models with select-all / unselect-all / invert and batch write
 
 ## License
 
