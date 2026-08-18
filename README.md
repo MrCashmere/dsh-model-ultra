@@ -1,5 +1,8 @@
 # dsh-model-pro
 
+[![npm version](https://img.shields.io/npm/v/dsh-model-pro.svg)](https://www.npmjs.com/package/dsh-model-pro)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A dynamic Cordis plugin for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/dsh) that provides a "Model Pro" settings page — a full lifecycle management UI for `llm-pi-ai` providers.
 
 ## Features
