@@ -1,0 +1,43 @@
+{
+  "name": "dsh-model-pro",
+  "version": "1.0.0",
+  "description": "Model Pro — DSH plugin for llm-pi-ai provider lifecycle management: create/delete/edit providers, custom HTTP headers, enable/disable, batch model discovery with select-all/invert",
+  "main": "host.js",
+  "scripts": {
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "llm-pi-ai",
+    "plugin",
+    "model-provider",
+    "settings"
+  ],
+  "author": "wqy8593521",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wqy8593521/dsh-model-pro.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wqy8593521/dsh-model-pro/issues"
+  },
+  "homepage": "https://github.com/wqy8593521/dsh-model-pro#readme",
+  "files": [
+    "host.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
