@@ -11,6 +11,7 @@ import { CSS } from './styles'
 import { createCall } from './rpc'
 import { ModelProPage } from './components/ModelProPage'
 import type { TFunc } from '../shared/types'
+import React from './react'
 
 export function apply(ctx: any) {
   const locale = ctx.get('locale') || ctx.locale
@@ -26,16 +27,13 @@ export function apply(ctx: any) {
 
   const t: TFunc = locale !== undefined ? locale.bind(CLIENT_NS) : (k: string) => k
 
-  // `styles` is a global provided by the Cordis client sandbox
-  ;(globalThis as any).styles.insert(CSS)
+  // `styles` is injected as a closure parameter by the Cordis client runner.
+  styles.insert(CSS)
 
   const call = createCall(t)
 
   const slots = ctx.get('slots') || ctx.slots
   if (slots === undefined) return
-
-  // `React` is a global in the Cordis client sandbox
-  const React = (globalThis as any).React
 
   slots.inject('settings.section', () => {
     return slots.register(

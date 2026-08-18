@@ -4,9 +4,8 @@ import type { TFunc } from '../shared/types'
 
 export function createCall(t: TFunc) {
   return async function call(method: string, payload?: Record<string, unknown>): Promise<any> {
-    // `host` is provided by the Cordis client sandbox at runtime
-    const h = (globalThis as any).host
-    const r = await h.call(method, payload || {})
+    // `host` is injected as a closure parameter by the Cordis client runner.
+    const r = await host.call(method, payload || {})
     if (r === null || typeof r !== 'object' || r.ok !== true) {
       const msg = (e: unknown): string =>
         typeof e === 'string'

@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-pro",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Model Pro — DSH plugin for llm-pi-ai provider lifecycle management: create/delete/edit providers, custom HTTP headers, enable/disable, batch model discovery with select-all/invert",
   "main": "dist/host.js",
   "scripts": {

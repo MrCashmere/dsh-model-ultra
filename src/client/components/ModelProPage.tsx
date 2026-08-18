@@ -44,7 +44,8 @@ export function ModelProPage({ t, call }: Props) {
   }
 
   const onDelete = async (route: string) => {
-    if (!window.confirm(t('deleteConfirm').replace('{route}', route))) return
+    // `confirm` is a browser global available in the client sandbox.
+    if (!confirm(t('deleteConfirm').replace('{route}', route))) return
     setBusy(true); setStatus(null)
     try {
       await call('delete-provider', { route })
