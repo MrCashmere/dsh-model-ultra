@@ -13,7 +13,21 @@ A dynamic Cordis plugin for [DeepSeek Harness (DSH)](https://github.com/deepseek
 
 ## Installation
 
-This plugin is designed to run as a dynamic Cordis plugin inside a DSH session. Use `cordis_define` with the Host and Client halves from this repo, then `cordis_run` to activate.
+### Via dsh CLI (recommended)
+
+```sh
+dsh plugin add wqy8593521/dsh-model-pro
+```
+
+Or install from npm (prebuilt, skips build approval):
+
+```sh
+dsh plugin add npm:dsh-model-pro
+```
+
+### Manual activation
+
+This plugin can also run as a dynamic Cordis plugin inside a DSH session. Use `cordis_define` with the Host and Client halves, then `cordis_run` to activate.
 
 ### Host half
 
