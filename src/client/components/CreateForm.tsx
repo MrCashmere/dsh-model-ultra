@@ -96,6 +96,17 @@ export function CreateForm({ t, form, set, protocols, busy, errors, onCreate, on
         <section className="mpro-step">
           <span className="mpro-stepLabel">{t('stepCreds')}</span>
           <div className="mpro-field">
+            <span className="mpro-fieldLabel">{t('apiKeyField')}</span>
+            <input
+              className="mpro-input mpro-inputMono"
+              type="password"
+              value={form.apiKey}
+              placeholder={t('apiKeyPlaceholder')}
+              onChange={(e) => set({ apiKey: e.target.value })}
+            />
+            <span className="mpro-hint">{t('apiKeyHint')}</span>
+          </div>
+          <div className="mpro-field">
             <span className="mpro-fieldLabel">{t('apiKeyEnvField')}</span>
             <input
               className="mpro-input mpro-inputMono"

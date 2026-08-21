@@ -78,7 +78,10 @@ function createLlm(log = []) {
 // ---------------------------------------------------------------------------
 async function loadHost() {
   const code = readFileSync(HOST_BUNDLE, 'utf8')
-  const sandbox = { console, setTimeout, clearTimeout, Date, Promise, AbortController }
+  // btoa/atob are injected by the real host sandbox too; deliberately no
+  // `crypto` here so the smoke exercises the bundled pure-JS AES fallback
+  // (the dynamic sandbox withholds WebCrypto).
+  const sandbox = { console, setTimeout, clearTimeout, Date, Promise, AbortController, btoa, atob, TextEncoder, TextDecoder }
   sandbox.globalThis = sandbox
   sandbox.harness = { handle: (name, fn) => { sandbox.handles[name] = fn } }
   sandbox.handles = {}
@@ -93,12 +96,27 @@ function assert(cond, msg) {
 }
 
 // ---------------------------------------------------------------------------
+// mock credentials service — an in-memory secret store keyed by ref name.
+// ---------------------------------------------------------------------------
+const credStore = new Map()
+const creds = {
+  resolve: async (ref) => ({ value: credStore.get(ref) }),
+  set: async (ref, value) => { credStore.set(ref, value) },
+  unset: async (ref) => { credStore.delete(ref) },
+}
+
+// ---------------------------------------------------------------------------
 const store = createSettings({ providers: {}, disabledProviders: {} })
 const log = { section: () => store.doc() }
 const llm = createLlm(log)
 const cleanups = []
 const ctx = {
-  get: (name) => (name === 'settings' ? store : name === 'llm' ? llm : undefined),
+  get: (name) => (
+    name === 'settings' ? store
+      : name === 'llm' ? llm
+        : name === 'credentials' ? creds
+          : undefined
+  ),
   on: () => {},
   effect: (fn) => { const c = fn(); if (typeof c === 'function') cleanups.push(c) },
 }
@@ -162,6 +180,44 @@ assert(log.lastConfig && log.lastConfig.provider === 'my-gw' && log.lastConfig.m
 // --- test-provider on unknown provider ---
 r = await P('test-provider', { route: 'ghost' })
 assert(!r.ok, 'test unknown route rejected')
+
+// --- set-api-key: encrypted at rest + authoritative copy in credentials ---
+const KEY_A = 'sk-test-secret-AAAA'
+const KEY_B = 'sk-test-secret-BBBB'
+r = await P('set-api-key', { route: 'my-gw', apiKey: KEY_A })
+assert(r.ok && r.stored === true && r.envRef === 'GW_KEY', 'set-api-key stores: ' + JSON.stringify(r))
+assert(provs()['my-gw'].apiKeyEnc && typeof provs()['my-gw'].apiKeyEnc.ct === 'string', 'apiKeyEnc snapshot written')
+assert(!JSON.stringify(provs()['my-gw'].apiKeyEnc).includes('secret-AAAA'), 'plaintext never lands in the config')
+assert(credStore.get('GW_KEY') === KEY_A, 'authoritative copy stored in credentials service')
+const encKey1 = credStore.get('DSH_MODEL_PRO_ENC_KEY')
+assert(typeof encKey1 === 'string' && encKey1.length > 32, 'random encryption key seeded in credentials service')
+
+r = await P('get-provider', { route: 'my-gw' })
+assert(r.ok && r.hasSecret === true && r.secret === undefined, 'hasSecret reported, secret hidden by default')
+r = await P('get-provider', { route: 'my-gw', includeSecret: true })
+assert(r.ok && r.secret === KEY_A, 'get includeSecret decrypts: ' + JSON.stringify(r))
+r = await P('list-providers')
+assert(r.providers.find((x) => x.route === 'my-gw').hasSecret === true, 'list flags hasSecret')
+
+// --- reinstall stability: enc key is NEVER regenerated, old ciphertext still
+// decrypts with the same key (simulate reinstall = settings/credentials persist,
+// plugin closure gone; restore the OLD snapshot into the profile). ---
+const blobA = structuredClone(provs()['my-gw'].apiKeyEnc)
+await P('set-api-key', { route: 'my-gw', apiKey: KEY_B })
+assert(credStore.get('DSH_MODEL_PRO_ENC_KEY') === encKey1, 'encryption key unchanged across saves (reinstall-stable)')
+assert(credStore.get('GW_KEY') === KEY_B, 'credentials updated to new key')
+r = await P('get-provider', { route: 'my-gw', includeSecret: true })
+assert(r.ok && r.secret === KEY_B, 'new key decrypts after re-save')
+// put the old snapshot back, as a reinstall would (config file unchanged)
+store.doc().providers['my-gw'].apiKeyEnc = blobA
+r = await P('get-provider', { route: 'my-gw', includeSecret: true })
+assert(r.ok && r.secret === KEY_A, 'OLD ciphertext decrypted after reinstall-style restore: ' + JSON.stringify(r))
+
+// --- clear key ---
+r = await P('set-api-key', { route: 'my-gw', apiKey: '' })
+assert(r.ok && r.stored === false, 'clear key ok')
+assert(!provs()['my-gw'].apiKeyEnc, 'clear removes encrypted snapshot')
+assert(credStore.get('GW_KEY') === undefined, 'clear removes credential copy')
 
 // --- disable -> list/get/test ---
 r = await P('toggle-provider', { route: 'my-gw', enabled: false })

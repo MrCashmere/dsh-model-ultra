@@ -50,5 +50,8 @@
     "client": {
       "platform": "web"
     }
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.3.0"
   }
 }

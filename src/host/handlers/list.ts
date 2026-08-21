@@ -39,6 +39,7 @@ export async function listProviders(ctx: HostCtx) {
       headerCount: p.headers && typeof p.headers === 'object' ? Object.keys(p.headers).length : 0,
       modelCount: hasExplicit ? p.models!.length : 0,
       usesCatalog: !hasExplicit,
+      hasSecret: !!(p as any).apiKeyEnc,
     })
   }
 

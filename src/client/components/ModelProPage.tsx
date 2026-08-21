@@ -16,7 +16,7 @@ interface Props {
 type Segment = 'all' | 'active' | 'disabled'
 
 const EMPTY_FORM = (): CreateFormState => ({
-  route: '', displayName: '', api: 'openai-completions', baseURL: '', apiKeyEnv: '',
+  route: '', displayName: '', api: 'openai-completions', baseURL: '', apiKeyEnv: '', apiKey: '',
 })
 
 const validRoute = (r: string) => /^[A-Za-z0-9_.-]+$/.test(r)

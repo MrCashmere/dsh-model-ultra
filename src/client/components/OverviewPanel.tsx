@@ -2,7 +2,7 @@
  * blur). Right: a readiness checklist that makes the next step obvious. */
 
 import React from '../react'
-import type { InfoState, TFunc } from '../../shared/types'
+import type { InfoState, TFunc, CallFn } from '../../shared/types'
 import { fmt } from '../labels'
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   set: (patch: Partial<InfoState>) => void
   protocols: string[]
   route: string
+  call: CallFn
+  hasSecret: boolean
   saveField: (field: string, value: string) => void
   modelCount: number
   headerCount: number
@@ -19,9 +21,47 @@ interface Props {
 }
 
 export function OverviewPanel({
-  t, info, set, protocols, route, saveField,
-  modelCount, headerCount, onGoTest, inlineStatus,
+  t, info, set, protocols, route, call, hasSecret,
+  saveField, modelCount, headerCount, onGoTest, inlineStatus,
 }: Props) {
+  const [draft, setDraft] = React.useState('')
+  const [showDraft, setShowDraft] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+  const [revealed, setRevealed] = React.useState('')
+  const [showRevealed, setShowRevealed] = React.useState(false)
+  const [msg, setMsg] = React.useState('')
+
+  const saveKey = async () => {
+    setBusy(true)
+    setMsg('')
+    try {
+      const r = await call('set-api-key', { route, apiKey: draft })
+      setRevealed('')
+      setShowRevealed(false)
+      setDraft('')
+      setMsg(draft.trim() ? t('apiKeySaved') : t('apiKeyCleared'))
+    } catch (e) {
+      setMsg(t('apiKeySaveErr') + String((e as Error)?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reveal = async () => {
+    if (showRevealed) { setShowRevealed(false); setRevealed(''); return }
+    setBusy(true)
+    setMsg('')
+    try {
+      const r = await call('get-provider', { route, includeSecret: true })
+      if (r && typeof r.secret === 'string') { setRevealed(r.secret); setShowRevealed(true) }
+      else setMsg(t('apiKeyRevealFail'))
+    } catch (e) {
+      setMsg(t('apiKeyRevealFail') + ' ' + String((e as Error)?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const check = (done: boolean) => (
     <span className="mpro-setupDot">{done ? '✓' : ''}</span>
   )
@@ -76,6 +116,37 @@ export function OverviewPanel({
               onChange={(e) => set({ apiKeyEnv: e.target.value })}
               onBlur={() => void saveField('apiKeyEnv', info.apiKeyEnv)}
             />
+          </div>
+          <div className="mpro-field">
+            <span className="mpro-fieldLabel">
+              {t('apiKeySecretField')} {hasSecret ? <span className="mpro-inlineStatusOk">{`· ${t('apiKeySet')}`}</span> : null}
+            </span>
+            <div className="mpro-hdrAdd">
+              <input
+                className="mpro-input mpro-inputMono"
+                type={showDraft ? 'text' : 'password'}
+                value={draft}
+                placeholder={hasSecret ? t('apiKeySecretPresent') : t('apiKeyPlaceholder')}
+                onChange={(e) => setDraft(e.target.value)}
+                style={{ flex: 1, minWidth: 180 }}
+              />
+              <button className="mpro-btn mpro-btnSm" onClick={() => setShowDraft((s) => !s)}>
+                {showDraft ? t('apiKeyHideStored') : t('apiKeyShowStored')}
+              </button>
+              <button className="mpro-btn mpro-btnSm" disabled={busy} onClick={() => void saveKey()}>
+                {t('apiKeySave')}
+              </button>
+              {hasSecret && (
+                <button className="mpro-btn mpro-btnSm mpro-btnGhost" disabled={busy} onClick={() => void reveal()}>
+                  {showRevealed ? t('apiKeyHideStored') : t('apiKeyShowStored')}
+                </button>
+              )}
+            </div>
+            {showRevealed && revealed ? (
+              <div className="mpro-reply" style={{ marginTop: 6, overflowWrap: 'break-word' }}>{revealed}</div>
+            ) : null}
+            {msg ? <span className="mpro-inlineStatus">{msg}</span> : null}
+            <span className="mpro-hint">{t('apiKeySecretHint')}</span>
           </div>
           {inlineStatus}
         </div>

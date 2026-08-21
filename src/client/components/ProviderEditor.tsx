@@ -101,6 +101,8 @@ export function ProviderEditor({ t, call, data, initialTab, onBack, fail }: Prop
         set={set}
         protocols={protocols}
         route={data.route}
+        call={call}
+        hasSecret={!!data.hasSecret}
         saveField={saveField}
         modelCount={(models || []).length}
         headerCount={(headers || []).length}

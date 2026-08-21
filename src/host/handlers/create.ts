@@ -3,10 +3,11 @@
 import { PROTOS } from '../../shared/constants'
 import type { HostCtx } from '../utils'
 import { readProviders, readDisabled, checkWritable, writeSection, makeHostPlain } from '../utils'
+import { setApiKey } from './updateKey'
 
 export async function createProvider(
   ctx: HostCtx,
-  args: { route?: string; displayName?: string; api?: string; baseURL?: string; apiKeyEnv?: string },
+  args: { route?: string; displayName?: string; api?: string; baseURL?: string; apiKeyEnv?: string; apiKey?: string },
 ) {
   const st = ctx.get('settings')
   if (st === undefined) return { ok: false as const, error: 'settings 服务不可用' }
@@ -48,5 +49,13 @@ export async function createProvider(
     return { ok: false as const, error: String((err as Error)?.message || err) }
   }
 
-  return { ok: true as const, route: id }
+  // Persist a real key if one was pasted during the guided create flow
+  // (encrypted at rest + authoritative copy in the credentials service).
+  let keySaved: boolean | undefined
+  if (typeof args.apiKey === 'string' && args.apiKey.trim()) {
+    const kr = await setApiKey(ctx, { route: id, apiKey: args.apiKey })
+    keySaved = kr.ok === true
+  }
+
+  return { ok: true as const, route: id, ...(keySaved !== undefined ? { keySaved } : {}) }
 }

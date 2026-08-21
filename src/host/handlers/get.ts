@@ -3,8 +3,9 @@
 import { readProviders, readDisabled, readProfile } from '../utils'
 import type { HostCtx } from '../utils'
 import type { HeaderPair } from '../../shared/types'
+import { decryptSecret } from '../crypto'
 
-export async function getProvider(ctx: HostCtx, args: { route?: string }) {
+export async function getProvider(ctx: HostCtx, args: { route?: string; includeSecret?: boolean }) {
   const st = ctx.get('settings')
   const route = args?.route
   if (!route) return { ok: false as const, error: '缺少 route' }
@@ -38,6 +39,27 @@ export async function getProvider(ctx: HostCtx, args: { route?: string }) {
     }
   }
 
+  // Encrypted-at-rest marker + optional on-demand reveal. Reveal decrypts the
+  // snapshot first, then falls back to the credentials-service copy (in case
+  // the snapshot is missing or its key changed mid-flight).
+  const hasSecret = !!(p as any).apiKeyEnc
+  let secret: string | undefined
+  if (args.includeSecret) {
+    try {
+      const d = await decryptSecret(ctx, (p as any).apiKeyEnc)
+      if (d !== null) secret = d
+    } catch { /* fall through */ }
+    if (secret === undefined && p.apiKeyEnv && typeof p.apiKeyEnv === 'string') {
+      const creds = ctx.get('credentials')
+      if (creds !== undefined) {
+        try {
+          const r = await (creds as any).resolve(p.apiKeyEnv)
+          if (r && typeof r.value === 'string' && r.value) secret = r.value
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
   return {
     ok: true as const,
     route,
@@ -50,5 +72,7 @@ export async function getProvider(ctx: HostCtx, args: { route?: string }) {
     models,
     usesCatalog: !hasExplicit,
     availableModels,
+    hasSecret,
+    ...(secret !== undefined ? { secret } : {}),
   }
 }

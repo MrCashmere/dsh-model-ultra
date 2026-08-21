@@ -1,11 +1,22 @@
 /** Shared types used by both host and client halves. */
 
+/** AES-256-GCM encrypted secret snapshot stored in a provider profile.
+ * `iv`/`ct` are base64; the random AES key lives in the DSH credentials
+ * service under ENC_KEY_REF (stable across plugin reinstall). */
+export interface EncryptedSecret {
+  v: 1
+  iv: string
+  ct: string
+}
+
 /** A provider entry in the providers / disabledProviders dict */
 export interface ProviderProfile {
   displayName?: string
   api?: string
   baseURL?: string
   apiKeyEnv?: string
+  /** Encrypted-at-rest snapshot of the real API key (see EncryptedSecret). */
+  apiKeyEnc?: EncryptedSecret
   headers?: Record<string, string>
   models?: ModelEntry[]
   [key: string]: unknown
@@ -33,6 +44,8 @@ export interface ProviderListItem {
   headerCount: number
   modelCount: number
   usesCatalog: boolean
+  /** Whether an encrypted API-key snapshot is stored for this provider. */
+  hasSecret: boolean
 }
 
 /** Result from get-provider handler */
@@ -49,6 +62,10 @@ export interface ProviderData {
   usesCatalog: boolean
   /** Advertised model ids for the test dropdown (advisory; may be empty). */
   availableModels?: string[]
+  /** Whether an encrypted API-key snapshot is stored. */
+  hasSecret?: boolean
+  /** Decrypted API key — present only when the caller passed `includeSecret`. */
+  secret?: string
 }
 
 /** Result from test-provider handler */
@@ -104,6 +121,8 @@ export interface CreateFormState {
   api: string
   baseURL: string
   apiKeyEnv: string
+  /** Optional real API key to persist (encrypted) on create. */
+  apiKey: string
 }
 
 /** The info-panel editable state in the editor */

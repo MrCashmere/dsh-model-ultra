@@ -24,6 +24,7 @@ import { updateField } from './handlers/updateField'
 import { updateHeaders } from './handlers/updateHeaders'
 import { applyModels } from './handlers/applyModels'
 import { testProvider } from './handlers/test'
+import { setApiKey } from './handlers/updateKey'
 import { restoreDisabledOnUnload } from './lifecycle'
 
 export function apply(ctx: HostCtx) {
@@ -40,6 +41,7 @@ export function apply(ctx: HostCtx) {
   h.handle('update-headers', async (args: any) => updateHeaders(ctx, args))
   h.handle('apply-models', async (args: any) => applyModels(ctx, args))
   h.handle('test-provider', async (args: any) => testProvider(ctx, args))
+  h.handle('set-api-key', async (args: any) => setApiKey(ctx, args))
 
   // Uninstall / disable safety net: restore disabled providers to `providers`
   // so nothing is lost when this plugin goes away. cordis has no public
