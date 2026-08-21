@@ -81,4 +81,5 @@ export function apply(ctx: any) {
   })
 }
 
-export { apply as default }
+// NOTE: no `default` export here — the loader's unwrapExports prefers a
+// default export and would swallow the `name`/`inject` named exports.

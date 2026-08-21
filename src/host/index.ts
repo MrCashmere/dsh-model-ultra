@@ -65,5 +65,3 @@ export function apply(ctx: HostCtx) {
     })
   }
 }
-
-export { apply as default }
