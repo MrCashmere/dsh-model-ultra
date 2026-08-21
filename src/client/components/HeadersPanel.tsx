@@ -1,4 +1,4 @@
-/** HeadersPanel — the "请求头"tab in the provider editor. */
+/** HeadersPanel — the "请求头" tab. Add/remove custom headers; save persists. */
 
 import React from '../react'
 import type { HeaderPair, TFunc } from '../../shared/types'
@@ -19,20 +19,21 @@ export function HeadersPanel({ t, headers, setHeaders, busy, saveHeaders, inline
   const removeHeader = (i: number) => setHeaders((h) => h.filter((_, idx) => idx !== i))
 
   return (
-    <div className="mpro-cardBody">
+    <div className="mpro-panel">
       <p className="mpro-hint">{t('headersHint')}</p>
+
       {headers.length > 0 ? (
         <div>
           {headers.map((h, i) => (
             <div key={i} className="mpro-hdrRow">
               <input
-                className="mpro-input"
+                className="mpro-input mpro-inputMono"
                 value={h.name}
                 placeholder={t('headerName')}
                 onChange={(e) => setHeader(i, { name: e.target.value })}
               />
               <input
-                className="mpro-input"
+                className="mpro-input mpro-inputMono"
                 value={h.value}
                 placeholder={t('headerValue')}
                 onChange={(e) => setHeader(i, { value: e.target.value })}
@@ -44,15 +45,16 @@ export function HeadersPanel({ t, headers, setHeaders, busy, saveHeaders, inline
           ))}
         </div>
       ) : (
-        <div className="mpro-emptyState">{t('emptyModels')}</div>
+        <div className="mpro-emptyState">{t('emptyHeaders')}</div>
       )}
-      <div style={{ display: 'flex', gap: '8px' }}>
+
+      <div className="mpro-hdrAdd">
         <button className="mpro-btn" onClick={addHeader}>{t('addHeader')}</button>
         <button className="mpro-btn mpro-btnPrimary" disabled={busy} onClick={saveHeaders}>
           {t('saveHeaders')}
         </button>
+        {inlineStatus}
       </div>
-      {inlineStatus}
     </div>
   )
 }

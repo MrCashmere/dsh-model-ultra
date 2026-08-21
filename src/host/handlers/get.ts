@@ -24,6 +24,20 @@ export async function getProvider(ctx: HostCtx, args: { route?: string }) {
     ? p.models!.map((m) => (m && typeof m === 'object' ? { ...m } : { id: String(m) }))
     : []
 
+  // Advertised model ids for the test dropdown (advisory; may be empty). For a
+  // catalog-route (or enabled custom) provider this is the real list the
+  // adapter knows, which the explicit `models` array may not carry.
+  let availableModels: string[] = []
+  if (!isDisabled) {
+    const llm = ctx.get('llm')
+    if (llm !== undefined) {
+      try {
+        const m = await (llm as any).listModels(route)
+        if (Array.isArray(m)) availableModels = m.map((x: any) => (x && typeof x.id === 'string' ? x.id : '')).filter(Boolean)
+      } catch { /* advisory only */ }
+    }
+  }
+
   return {
     ok: true as const,
     route,
@@ -35,5 +49,6 @@ export async function getProvider(ctx: HostCtx, args: { route?: string }) {
     headers,
     models,
     usesCatalog: !hasExplicit,
+    availableModels,
   }
 }

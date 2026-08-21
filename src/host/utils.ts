@@ -107,7 +107,7 @@ export function checkWritable(st: SettingsService | undefined): boolean {
 }
 
 /**
- * Write both providers and disabledProviders dicts to the settings section.
+ * Write both provider dicts to the `llm-pi-ai` settings section.
  * This is the only write path — every handler that modifies state calls this.
  */
 export async function writeSection(

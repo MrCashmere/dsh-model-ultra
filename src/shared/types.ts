@@ -1,6 +1,6 @@
 /** Shared types used by both host and client halves. */
 
-/** A provider entry in the providers or disabledProviders dict */
+/** A provider entry in the providers / disabledProviders dict */
 export interface ProviderProfile {
   displayName?: string
   api?: string
@@ -47,6 +47,19 @@ export interface ProviderData {
   headers: HeaderPair[]
   models: ModelEntry[]
   usesCatalog: boolean
+  /** Advertised model ids for the test dropdown (advisory; may be empty). */
+  availableModels?: string[]
+}
+
+/** Result from test-provider handler */
+export interface TestResult {
+  ok: boolean
+  model?: string
+  latencyMs?: number
+  stopReason?: string
+  reply?: string
+  truncated?: boolean
+  error?: string
 }
 
 /** A header name-value pair as used in the UI */

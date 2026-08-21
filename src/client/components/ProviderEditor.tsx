@@ -1,21 +1,28 @@
-/** ProviderEditor — the tabbed editor view for a single provider. */
+/** ProviderEditor — the tabbed editor for one provider: Overview / Headers /
+ * Models / Test. Header carries lifecycle actions (enable/disable/delete). */
 
 import React from '../react'
 import type { ProviderData, InfoState, HeaderPair, ModelEntry, DiscoveredModel, StatusMsg, TFunc, CallFn } from '../../shared/types'
-import { InfoPanel } from './InfoPanel'
+import { fmt } from '../labels'
+import { OverviewPanel } from './OverviewPanel'
 import { HeadersPanel } from './HeadersPanel'
 import { ModelsPanel } from './ModelsPanel'
+import { TestPanel } from './TestPanel'
+
+export type EditorTab = 'overview' | 'headers' | 'models' | 'test'
 
 interface Props {
   t: TFunc
   call: CallFn
   data: ProviderData
+  initialTab?: EditorTab
   onBack: () => void
   fail: (e: unknown) => void
 }
 
-export function ProviderEditor({ t, call, data, onBack, fail }: Props) {
-  const [tab, setTab] = React.useState<'info' | 'headers' | 'models'>('info')
+export function ProviderEditor({ t, call, data, initialTab, onBack, fail }: Props) {
+  const [tab, setTab] = React.useState<EditorTab>(initialTab || 'overview')
+  const [disabled, setDisabled] = React.useState(!!data.disabled)
   const [info, setInfo] = React.useState<InfoState>({
     displayName: data.displayName,
     api: data.api || 'openai-completions',
@@ -25,6 +32,7 @@ export function ProviderEditor({ t, call, data, onBack, fail }: Props) {
   const [protocols, setProtocols] = React.useState(['openai-completions', 'openai-responses', 'anthropic-messages'])
   const [headers, setHeaders] = React.useState<HeaderPair[]>(data.headers?.length ? data.headers : [])
   const [models, setModels] = React.useState<ModelEntry[]>(data.models || [])
+  const [availableModels, setAvailableModels] = React.useState<string[]>(data.availableModels || [])
   const [discovered, setDiscovered] = React.useState<DiscoveredModel[] | null>(null)
   const [selectedIds, setSelectedIds] = React.useState<Record<string, boolean>>({})
   const [apiKeyProbe, setApiKeyProbe] = React.useState('')
@@ -53,25 +61,55 @@ export function ProviderEditor({ t, call, data, onBack, fail }: Props) {
     } catch (e) { fail(e) } finally { setBusy(false) }
   }
 
+  const toggle = async (enable: boolean) => {
+    setBusy(true); setStatus(null)
+    try {
+      const r = await call('toggle-provider', { route: data.route, enabled: enable })
+      setDisabled(!enable)
+      setStatus({ kind: 'ok', text: fmt(t('statusToggled'), { route: r.route, action: enable ? t('enable') : t('disable') }) })
+      // Refresh the advertised model list now that the provider may be registered.
+      const fresh = await call('get-provider', { route: data.route }).catch(() => null)
+      if (fresh && Array.isArray(fresh.availableModels)) setAvailableModels(fresh.availableModels)
+    } catch (e) { fail(e) } finally { setBusy(false) }
+  }
+
+  const remove = async () => {
+    if (!confirm(fmt(t('deleteConfirm'), { route: data.route }))) return
+    setBusy(true); setStatus(null)
+    try {
+      await call('delete-provider', { route: data.route })
+      onBack()
+    } catch (e) { fail(e) } finally { setBusy(false) }
+  }
+
   const inlineStatus = status
     ? <div className={status.kind === 'ok' ? 'mpro-inlineStatus mpro-inlineStatusOk' : 'mpro-inlineStatus mpro-inlineStatusErr'}>{status.text}</div>
     : null
 
-  const tabBtn = (id: 'info' | 'headers' | 'models', label: string) => (
-    <button
-      className={tab === id ? 'mpro-tab mpro-tabActive' : 'mpro-tab'}
-      onClick={() => setTab(id)}
-    >
+  const tabBtn = (id: EditorTab, label: string, count?: number) => (
+    <button className={tab === id ? 'mpro-tab mpro-tabActive' : 'mpro-tab'} onClick={() => setTab(id)}>
       {label}
+      {count != null && count > 0 ? <span className="mpro-tabCount">({count})</span> : null}
     </button>
   )
 
   const activePanel =
-    tab === 'info' ? (
-      <InfoPanel t={t} info={info} set={set} protocols={protocols} route={data.route} saveField={saveField} inlineStatus={inlineStatus} />
+    tab === 'overview' ? (
+      <OverviewPanel
+        t={t}
+        info={info}
+        set={set}
+        protocols={protocols}
+        route={data.route}
+        saveField={saveField}
+        modelCount={(models || []).length}
+        headerCount={(headers || []).length}
+        onGoTest={() => setTab('test')}
+        inlineStatus={inlineStatus}
+      />
     ) : tab === 'headers' ? (
       <HeadersPanel t={t} headers={headers} setHeaders={setHeaders} busy={busy} saveHeaders={saveHeaders} inlineStatus={inlineStatus} />
-    ) : (
+    ) : tab === 'models' ? (
       <ModelsPanel
         t={t}
         call={call}
@@ -93,20 +131,51 @@ export function ProviderEditor({ t, call, data, onBack, fail }: Props) {
         fail={fail}
         inlineStatus={inlineStatus}
       />
+    ) : (
+      <TestPanel
+        t={t}
+        call={call}
+        route={data.route}
+        disabled={disabled}
+        modelOptions={availableModels}
+        explicitModels={models || []}
+        key={data.route}
+      />
     )
 
   return (
     <div className="mpro-root">
       <div className="mpro-card">
         <div className="mpro-editorHead">
-          <button className="mpro-btn" onClick={onBack}>← {t('back')}</button>
-          <h2 className="mpro-editorRoute">{data.route}</h2>
-          {data.disabled ? <span className="mpro-tag mpro-tagOff">{t('disabled')}</span> : null}
+          <button className="mpro-btn mpro-btnSm" onClick={onBack}>← {t('back')}</button>
+          <h2 className="mpro-editorTitle">{data.displayName || data.route}</h2>
+          <span className="mpro-editorRoute">{data.route}</span>
+          {disabled ? (
+            <span className="mpro-pill mpro-pillOff">{t('stateDisabled')}</span>
+          ) : (
+            <span className="mpro-pill mpro-pillActive">{t('stateActive')}</span>
+          )}
+          <div className="mpro-editorActions">
+            {!disabled && (
+              <button className="mpro-btn mpro-btnSm" disabled={busy} onClick={() => void toggle(false)}>
+                {t('disable')}
+              </button>
+            )}
+            {disabled && (
+              <button className="mpro-btn mpro-btnSm" disabled={busy} onClick={() => void toggle(true)}>
+                {t('enable')}
+              </button>
+            )}
+            <button className="mpro-btn mpro-btnSm mpro-btnDanger" disabled={busy} onClick={() => void remove()}>
+              {t('delete')}
+            </button>
+          </div>
         </div>
         <div className="mpro-tabs">
-          {tabBtn('info', t('tabInfo'))}
-          {tabBtn('headers', `${t('tabHeaders')}${headers.length ? ` (${headers.length})` : ''}`)}
-          {tabBtn('models', `${t('tabModels')}${models && models.length ? ` (${models.length})` : ''}`)}
+          {tabBtn('overview', t('tabOverview'))}
+          {tabBtn('headers', t('tabHeaders'), (headers || []).length)}
+          {tabBtn('models', t('tabModels'), (models || []).length)}
+          {tabBtn('test', t('tabTest'))}
         </div>
         {activePanel}
       </div>
