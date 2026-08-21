@@ -60,15 +60,22 @@
 
 > DSH 的插件管理命令会转发给 `pnpm`，并要求用 `--profile <name>` 指定目标 Profile（Web GUI 通常是 `web`）。
 
-### 方式一：通过 dsh CLI 安装（推荐）
-
-从 npm 安装（预构建，跳过构建审批）：
+### 方式一：从 npm 安装（推荐，预构建、无需构建脚本）
 
 ```sh
-dsh plugin --profile web add dsh-model-pro
+dsh plugin --profile web add npm:dsh-model-pro
 ```
 
-或直接从 GitHub 安装：
+> **务必带 `npm:` 前缀。** registry 上的包已预置 `dist/`，安装时不会触发构建脚本。
+> 若省略前缀写成 `add dsh-model-pro`，pnpm 可能把它解析为 git 源，进而执行 `prepare`
+> 构建脚本，被 pnpm 10 的安全策略拦截并报
+> `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`。
+
+### 方式二：从 GitHub 源安装（需允许构建脚本）
+
+git 源不含预构建的 `dist/`，安装时靠 `prepare` 现场构建。pnpm 10 默认禁止 git 依赖
+执行构建脚本，因此需先在 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`
+下加入 `dsh-model-pro: true`，再执行：
 
 ```sh
 dsh plugin --profile web add wqy8593521/dsh-model-pro
@@ -76,11 +83,11 @@ dsh plugin --profile web add wqy8593521/dsh-model-pro
 
 安装后重新打开（或刷新）DSH Web GUI，左侧「设置」中即出现「**模型 Pro**」入口。
 
-### 方式二：作为动态 Cordis 插件运行
+### 方式三：作为动态 Cordis 插件运行
 
 本插件也可在 DSH 会话内作为动态插件临时加载：用 `dist/host.js` 与 `dist/client.js` 两半的源码调用 `cordis_define`，再用 `cordis_run` 激活即可。
 
-### 方式三：从源码构建
+### 方式四：从源码构建
 
 ```sh
 git clone https://github.com/wqy8593521/dsh-model-pro.git
