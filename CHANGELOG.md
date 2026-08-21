@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3 — 2026-08-21
+
+- fix: mount loader row under package name, not display label
+- docs: fix install instructions — use npm: prefix; document git-source allowBuilds
+
 ## 1.1.2 — 2026-08-21
 
 - chore: auto-generate CHANGELOG in release script; backfill 1.1.1 notes
