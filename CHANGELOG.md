@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 — 2026-08-21
+
+- chore: auto-generate CHANGELOG in release script; backfill 1.1.1 notes
+
 ## 1.1.1 — 2026-08-21
 
 - **Smart routing** — named routes aggregating multiple providers' models with 5
