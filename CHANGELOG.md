@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4 — 2026-08-21
+
+- fix: drop default export so loader keeps name/inject named exports
+- refactor: convert to static bundle plugin (Typert Remote RPC)
+
 ## 1.1.3 — 2026-08-21
 
 - fix: mount loader row under package name, not display label
