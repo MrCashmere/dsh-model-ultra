@@ -131,7 +131,7 @@ export function OverviewPanel({
                 style={{ flex: 1, minWidth: 180 }}
               />
               <button className="mpro-btn mpro-btnSm" onClick={() => setShowDraft((s) => !s)}>
-                {showDraft ? t('apiKeyHideStored') : t('apiKeyShowStored')}
+                {showDraft ? t('apiKeyHideDraft') : t('apiKeyShowDraft')}
               </button>
               <button className="mpro-btn mpro-btnSm" disabled={busy} onClick={() => void saveKey()}>
                 {t('apiKeySave')}

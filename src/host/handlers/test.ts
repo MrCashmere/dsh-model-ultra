@@ -75,6 +75,7 @@ export async function testProvider(ctx: HostCtx, args: {
     return { ok: false as const, error: '没有可测试的模型：请先在「模型」页添加模型，或指定要测试的模型 ID' }
 
   const timeoutMs = clamp(args?.timeoutMs || DEFAULT_TIMEOUT_MS, 1000, 120000)
+  const maxTokens = typeof args?.maxTokens === 'number' ? clamp(args.maxTokens, 1, 1024) : 16
   const timer = ctx.get('timer') as { timeout: (fn: () => void, ms: number) => () => void } | undefined
   const t0 = Date.now()
   let reply = ''
@@ -92,18 +93,30 @@ export async function testProvider(ctx: HostCtx, args: {
   // deadline already won the race, so the process never sees an unhandled
   // rejection while the orphaned call drains in the background.
   const run = (async () => {
+    // The prepared config and the stream() call config MUST be identical on the
+    // fields DSH compares (provider/model/temperature/maxTokens/reasoningEffort/
+    // stop) — otherwise the pipeline throws "prepared LLM call config changed
+    // before adapter dispatch". `resolveCallFor` may CLAMP or normalize what we
+    // asked for (e.g. a model's own maxTokens cap), so the source of truth is
+    // `prepared.config`, not the numbers we passed in. Reuse them verbatim.
     const prepared = await (llm as any).prepareCall(
-      { provider: route, model, maxTokens: 16, temperature: 0 },
+      { provider: route, model, maxTokens, temperature: 0 },
     )
+    const pc = (prepared && typeof prepared === 'object' && prepared.config && typeof prepared.config === 'object')
+      ? prepared.config as { provider?: string; model?: string; temperature?: number; maxTokens?: number; reasoningEffort?: unknown; stop?: string[] }
+      : {}
     const prompt = (typeof args?.prompt === 'string' && args.prompt.trim()) || 'ping：请只回复 pong'
     const stream = prepared.stream({
-      provider: route,
-      model,
+      // Echo the resolved config exactly on the compared fields.
+      provider: typeof pc.provider === 'string' ? pc.provider : route,
+      model: typeof pc.model === 'string' ? pc.model : model,
+      temperature: typeof pc.temperature === 'number' ? pc.temperature : 0,
+      maxTokens: typeof pc.maxTokens === 'number' ? pc.maxTokens : maxTokens,
+      ...(pc.reasoningEffort !== undefined ? { reasoningEffort: pc.reasoningEffort } : {}),
+      ...(Array.isArray(pc.stop) ? { stop: pc.stop } : {}),
       // DSH's llm pipeline expects content as typed blocks (adapters call
       // content.some(...) on it); a plain string makes them throw.
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-      temperature: 0,
-      maxTokens: typeof args?.maxTokens === 'number' ? clamp(args.maxTokens, 1, 1024) : 16,
     })
 
     for await (const chunk of stream as any) {
@@ -123,7 +136,7 @@ export async function testProvider(ctx: HostCtx, args: {
       latencyMs: Date.now() - t0,
       stopReason: stopReason || (sawFinish ? 'stop' : 'unknown'),
       reply: reply.trim() || '(空回复)',
-      truncated: typeof args?.maxTokens === 'number' && reply.length > (args.maxTokens * 2),
+      truncated: reply.length > (maxTokens * 2),
     }
   })()
 

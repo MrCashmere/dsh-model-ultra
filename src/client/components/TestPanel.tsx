@@ -113,12 +113,26 @@ export function TestPanel({ t, call, route, disabled, modelOptions, explicitMode
       )}
 
       {err && (
+        <div className="mpro-verdict mpro-verdictFail">
+          <div className="mpro-verdictTitle">{t('verdictFail')}</div>
+        </div>
+      )}
+      {err && (
         <div className="mpro-resultBlock">
           <div className="mpro-resultLabel">{t('errorTitle')}</div>
           <div className="mpro-errorBlock">{err}</div>
         </div>
       )}
 
+      {result && !result.ok && (
+        <div className="mpro-verdict mpro-verdictFail">
+          <div className="mpro-verdictTitle">{t('verdictFail')}</div>
+          <div className="mpro-verdictMeta">
+            {result.model ? <span>{t('modelSelect')}: <b>{result.model}</b></span> : null}
+            {result.latencyMs != null ? <span>{t('latencyLabel')}: <b>{result.latencyMs} ms</b></span> : null}
+          </div>
+        </div>
+      )}
       {result && !result.ok && (
         <div className="mpro-resultBlock">
           <div className="mpro-resultLabel">{t('errorTitle')}</div>

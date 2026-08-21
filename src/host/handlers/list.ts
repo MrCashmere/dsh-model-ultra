@@ -25,7 +25,8 @@ export async function listProviders(ctx: HostCtx) {
     if (!p) continue
     const entry = dirMap.get(route)
     const hasExplicit = Array.isArray(p.models) && p.models.length > 0
-    const isDisabled = Object.prototype.hasOwnProperty.call(disabled, route)
+    const isDisabled =
+      (p as any).disabled === true || Object.prototype.hasOwnProperty.call(disabled, route)
 
     items.push({
       route,

@@ -7,6 +7,7 @@ import { fmt } from '../labels'
 import { CreateForm } from './CreateForm'
 import { ProviderCard } from './ProviderCard'
 import { ProviderEditor, type EditorTab } from './ProviderEditor'
+import { RoutesPanel } from './RoutesPanel'
 
 interface Props {
   t: TFunc
@@ -25,6 +26,7 @@ const validBaseURL = (u: string) => /^https?:\/\/.+/i.test(u)
 export function ModelProPage({ t, call }: Props) {
   const [boot, setBoot] = React.useState<BootState>({ providers: [], protocols: [], writable: true, error: '' })
   const [selected, setSelected] = React.useState<ProviderData | null>(null)
+  const [view, setView] = React.useState<'providers' | 'routes'>('providers')
   const [initTab, setInitTab] = React.useState<EditorTab>('overview')
   const [creating, setCreating] = React.useState(false)
   const [form, setForm] = React.useState<CreateFormState>(EMPTY_FORM())
@@ -152,45 +154,59 @@ export function ModelProPage({ t, call }: Props) {
       </div>
       <p className="mpro-intro">{t('intro')}</p>
       {banner}
-      <div className="mpro-segs">
-        {segBtn('all', t('segAll'))}
-        {segBtn('active', t('segActive'))}
-        {segBtn('disabled', t('segDisabled'))}
+      <div className="mpro-tabs" style={{ marginBottom: 14 }}>
+        <button className={view === 'providers' ? 'mpro-tab mpro-tabActive' : 'mpro-tab'} onClick={() => setView('providers')}>
+          {t('tabProviders')}
+        </button>
+        <button className={view === 'routes' ? 'mpro-tab mpro-tabActive' : 'mpro-tab'} onClick={() => setView('routes')}>
+          {t('tabRoutes')}
+        </button>
       </div>
-      {creating && (
-        <div style={{ marginBottom: 16 }}>
-          <CreateForm
-            t={t}
-            form={form}
-            set={set}
-            protocols={protocols}
-            busy={busy}
-            errors={errors}
-            onCreate={onCreate}
-            onCancel={() => { setCreating(false); setForm(EMPTY_FORM()); setErrors({}) }}
-          />
-        </div>
-      )}
-      {visible.length === 0 ? (
-        <div className="mpro-emptyState">
-          {providers.length === 0 ? t('empty') : segment === 'active' ? t('emptyActive') : t('emptyDisabled')}
-        </div>
+      {view === 'routes' ? (
+        <RoutesPanel t={t} call={call} providers={providers} />
       ) : (
-        <div className="mpro-pcList">
-          {visible.map((p) => (
-            <ProviderCard
-              key={p.route}
-              p={p}
-              t={t}
-              busy={busy}
-              writable={writable !== false}
-              onEdit={(route) => void openEdit(route)}
-              onTest={(route) => void openEdit(route, 'test')}
-              onToggle={onToggle}
-              onDelete={onDelete}
-            />
-          ))}
-        </div>
+        <>
+          <div className="mpro-segs">
+            {segBtn('all', t('segAll'))}
+            {segBtn('active', t('segActive'))}
+            {segBtn('disabled', t('segDisabled'))}
+          </div>
+          {creating && (
+            <div style={{ marginBottom: 16 }}>
+              <CreateForm
+                t={t}
+                form={form}
+                set={set}
+                protocols={protocols}
+                busy={busy}
+                errors={errors}
+                onCreate={onCreate}
+                onCancel={() => { setCreating(false); setForm(EMPTY_FORM()); setErrors({}) }}
+              />
+            </div>
+          )}
+          {visible.length === 0 ? (
+            <div className="mpro-emptyState">
+              {providers.length === 0 ? t('empty') : segment === 'active' ? t('emptyActive') : t('emptyDisabled')}
+            </div>
+          ) : (
+            <div className="mpro-pcList">
+              {visible.map((p) => (
+                <ProviderCard
+                  key={p.route}
+                  p={p}
+                  t={t}
+                  busy={busy}
+                  writable={writable !== false}
+                  onEdit={(route) => void openEdit(route)}
+                  onTest={(route) => void openEdit(route, 'test')}
+                  onToggle={onToggle}
+                  onDelete={onDelete}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

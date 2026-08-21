@@ -7,7 +7,11 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/host.smoke.mjs && node tests/client.smoke.mjs"
+    "test": "node tests/host.smoke.mjs && node tests/client.smoke.mjs",
+    "run:host": "node scripts/run-host.mjs",
+    "prepare": "test -f src/host/index.ts && npm run build || true",
+    "prepublishOnly": "npm run build && npm test",
+    "release": "node scripts/release.mjs"
   },
   "keywords": [
     "dsh",

@@ -1,5 +1,97 @@
 /** Shared types used by both host and client halves. */
 
+/** A resolver alias whose real model lives on "provider route / model id". */
+export interface RouteTarget {
+  provider: string
+  model: string
+  /** Weight used by weighted / round-robin strategies (default 1). */
+  weight?: number
+  /** Target-level switch (default true). Disabled targets are skipped. */
+  enabled?: boolean
+}
+
+/** Routing strategies implemented by the dispatch engine. */
+export type RouteStrategy =
+  | 'priority'    // ordered, fall back on failure
+  | 'weighted'    // probabilistic sampling by `weight`
+  | 'round-robin' // smooth weighted round-robin
+  | 'min-latency' // prefer lowest historical latency
+  | 'sticky'      // pin a session to its last successful target
+
+/** Per-route behaviour knobs shared by every strategy. */
+export interface RouteConfig {
+  /** Max targets tried before giving up (default: all). */
+  maxFallbacks?: number
+  /** Skip targets probe-marked down when routing (default true). */
+  healthAware?: boolean
+  /** Pin a sessionId to its last successful target across strategies. */
+  sticky?: boolean
+  /** Optional per-call soft timeout override. */
+  timeoutMs?: number
+}
+
+/** One named smart route: a bundle of targets picked by a strategy. */
+export interface RouteSpec {
+  strategy: RouteStrategy
+  targets: RouteTarget[]
+  config?: RouteConfig
+}
+
+/** The smart-routing table: route name -> spec. */
+export type RoutesMap = Record<string, RouteSpec>
+
+/** A composite provider: merge several providers' model lists into one virtual
+ * route. `union` exposes every model any member provides; `intersection` only
+ * exposes models ALL members provide. An optional per-strategy config decides
+ * which member serves a model when several own it. */
+export interface CompositeSpec {
+  /** Virtual route name (consumer-facing, e.g. `mixture`). */
+  route: string
+  /** Member providers whose models are merged. */
+  members: string[]
+  /** union (default) or intersection. */
+  mode: 'union' | 'intersection'
+  /** How to pick among members that own the same model (default priority). */
+  strategy: RouteStrategy
+}
+
+/** The composite table: composite route -> spec. */
+export type CompositesMap = Record<string, CompositeSpec>
+
+/** Probe / health state for a target. */
+export interface TargetHealth {
+  provider: string
+  model: string
+  status: 'unknown' | 'up' | 'down' | 'probing'
+  lastProbeAt?: number
+  latencyMs?: number
+  consecutiveFails: number
+  lastError?: string
+}
+
+/** Aggregated throughput/stats for one route/target. */
+export interface RouteStats {
+  calls: number
+  errors: number
+  latencySum: number
+  latencyN: number
+  tokensIn: number
+  tokensOut: number
+}
+
+/** One persisted request-log entry. */
+export interface RequestLogEntry {
+  ts: number
+  sessionId?: string
+  route: string
+  target: { provider: string; model: string }
+  status: 'ok' | 'error' | 'fallback'
+  tryIndex: number
+  latencyMs: number
+  tokens: { in?: number; out?: number }
+  error?: string
+}
+
 /** AES-256-GCM encrypted secret snapshot stored in a provider profile.
  * `iv`/`ct` are base64; the random AES key lives in the DSH credentials
  * service under ENC_KEY_REF (stable across plugin reinstall). */
@@ -9,7 +101,12 @@ export interface EncryptedSecret {
   ct: string
 }
 
-/** A provider entry in the providers / disabledProviders dict */
+/** A provider entry in the providers / disabledProviders dict. `disabled` is
+ * this plugin's marker (source of truth): disabling moves the profile into
+ * `disabledProviders` AND sets `disabled: true`; unload restores it to
+ * `providers` KEEPING the marker, so a reinstall re-parks it and the disabled
+ * state persists. Other consumers only ever read `providers`, so they simply
+ * don't see a "disabled" concept at all. */
 export interface ProviderProfile {
   displayName?: string
   api?: string
@@ -19,15 +116,21 @@ export interface ProviderProfile {
   apiKeyEnc?: EncryptedSecret
   headers?: Record<string, string>
   models?: ModelEntry[]
+  /** This plugin's disabled marker (true = disabled). */
+  disabled?: boolean
   [key: string]: unknown
 }
 
-/** A model entry in a provider's models array */
+/** A model entry in a provider's models array. `requestModel`, when set, is the
+ * real model id forwarded to the provider (the wire id differs from the
+ * selectable `id` — see the llm/stream rewrite in the host half). */
 export interface ModelEntry {
   id: string
   name?: string
   contextWindow?: number
   maxTokens?: number
+  /** Optional wire model id different from `id`. */
+  requestModel?: string
   [key: string]: unknown
 }
 

@@ -83,6 +83,23 @@ export function ModelsPanel({
     } catch (e) { fail(e) } finally { setBusy(false) }
   }
 
+  const setRequestModel = async (id: string, wire: string) => {
+    const next = (models || []).map((m) => (m.id === id ? { ...m, ...(wire.trim() ? { requestModel: wire.trim() } : { requestModel: undefined }) } : m))
+    setModels(next)
+  }
+
+  const saveMappings = async () => {
+    const list = (models || []).filter((m) => m.requestModel)
+    if (!list.length) return
+    setBusy(true); setStatus(null)
+    try {
+      const r = await call('apply-models', { route, models: list, mode: 'merge' })
+      setStatus({ kind: 'ok', text: fmt(t('statusModels'), { count: r.count }) })
+      const fresh = await call('get-provider', { route })
+      setModels(fresh.models || [])
+    } catch (e) { fail(e) } finally { setBusy(false) }
+  }
+
   const selectedCurrent = (models || []).filter((m) => selectedIds[m.id])
 
   return (
@@ -187,6 +204,11 @@ export function ModelsPanel({
         <div className="mpro-modelBar">
           <p className="mpro-sectionTitle" style={{ margin: 0 }}>{fmt(t('currentModelsTitle'), { n: (models || []).length })}</p>
           <span className="mpro-right" />
+          {(models || []).some((m) => m.requestModel) && (
+            <button className="mpro-btn mpro-btnSm" disabled={busy} onClick={() => void saveMappings()}>
+              {t('saveMappings')}
+            </button>
+          )}
           {selectedCurrent.length > 0 && (
             <button className="mpro-btn mpro-btnSm mpro-btnDanger" disabled={busy} onClick={() => void removeSelected()}>
               {t('removeSelected')} ({selectedCurrent.length})
@@ -201,6 +223,7 @@ export function ModelsPanel({
                   <th className="mpro-tblCk"></th>
                   <th>{t('idCol')}</th>
                   <th>{t('nameCol')}</th>
+                  <th>{t('reqModelField')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -211,6 +234,16 @@ export function ModelsPanel({
                     </td>
                     <td className="mpro-id">{m.id}</td>
                     <td>{m.name || m.id}</td>
+                    <td>
+                      <input
+                        title={t('reqModelHint')}
+                        className="mpro-input mpro-inputMono"
+                        style={{ width: 150 }}
+                        value={m.requestModel || ''}
+                        placeholder="—"
+                        onChange={(e) => void setRequestModel(m.id, e.target.value)}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>

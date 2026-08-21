@@ -8,11 +8,11 @@
  * llm-pi-ai settings section safely.
  */
 
-import { NS } from '../shared/constants'
-import type { ProviderProfile } from '../shared/types'
+import { NS, ROUTES_KEY } from '../shared/constants'
+import type { ProviderProfile, RoutesMap } from '../shared/types'
 
 /** Settings service interface (subset we use) */
-interface SettingsService {
+export interface SettingsService {
   get(ns: string): Record<string, unknown> | undefined
   readonly writable: boolean
   replace(ns: string, section: unknown): Promise<void>
@@ -96,6 +96,81 @@ export function readProfile(
   return p
 }
 
+/** Read the smart-routing alias table from the llm-pi-ai section.
+ * Returns a SHALLOW COPY: the resolved settings object is deep-frozen (so
+ * `delete`/assigment on it throws in strict mode — "Cannot delete property"),
+ * and callers may restructure the map in place before writing it back. */
+export function readRoutes(st: SettingsService | undefined): RoutesMap {
+  if (st === undefined) return {}
+  try {
+    const section = st.get(NS) as Record<string, unknown> | undefined
+    const r = section && section[ROUTES_KEY]
+    if (r && typeof r === 'object') return { ...(r as RoutesMap) }
+  } catch { /* ignore */ }
+  return {}
+}
+
+/** Write the smart-routing alias table, preserving every other section key. */
+export async function writeRoutes(st: SettingsService, routes: RoutesMap): Promise<void> {
+  const preserved: Record<string, unknown> = {}
+  try {
+    const section = st.get(NS) as Record<string, unknown> | undefined
+    if (section && typeof section === 'object') {
+      for (const k of Object.keys(section)) {
+        if (k === ROUTES_KEY) continue
+        preserved[k] = section[k]
+      }
+    }
+  } catch { /* nothing to preserve */ }
+  await st.replace(NS, makeHostPlain({ ...preserved, routes }) as any)
+}
+
+/** Read an arbitrary top-level key from the llm-pi-ai section (foreign-key
+ * accessor — e.g. composites / routeStats), returning a plain copy. */
+export function readRoutesRootKey(st: SettingsService | undefined, key: string): unknown {
+  if (st === undefined) return undefined
+  try {
+    const section = st.get(NS) as Record<string, unknown> | undefined
+    const v = section && section[key]
+    if (v && typeof v === 'object') return { ...(v as Record<string, unknown>) }
+    return v
+  } catch { /* ignore */ }
+  return undefined
+}
+
+/** Write a top-level key in the llm-pi-ai section, preserving every other key. */
+export async function writeRoutesRootKey(st: SettingsService | undefined, key: string, value: unknown): Promise<void> {
+  if (st === undefined) return
+  const preserved: Record<string, unknown> = {}
+  try {
+    const section = st.get(NS) as Record<string, unknown> | undefined
+    if (section && typeof section === 'object') {
+      for (const k of Object.keys(section)) {
+        if (k === key) continue
+        preserved[k] = section[k]
+      }
+    }
+  } catch { /* nothing to preserve */ }
+  await st.replace(NS, makeHostPlain({ ...preserved, [key]: value }) as any)
+}
+
+/** The wire model id for a provider/model: `requestModel` when the provider's
+ * model entry declares one, else the selectable id itself. */
+export function wireModelOf(st: SettingsService | undefined, provider: string, model: string): string {
+  if (!model) return model
+  try {
+    const providers = readProviders(st)
+    const p = readProfile(providers as Record<string, ProviderProfile>, provider)
+    const entry = Array.isArray(p?.models)
+      ? (p.models as Array<Record<string, unknown>>).find((m) => m && m.id === model)
+      : undefined
+    if (entry && typeof entry.requestModel === 'string' && entry.requestModel.trim()) {
+      return entry.requestModel.trim()
+    }
+  } catch { /* fall through */ }
+  return model
+}
+
 /** Check if settings are writable, defaulting to true. */
 export function checkWritable(st: SettingsService | undefined): boolean {
   if (st === undefined) return false
@@ -107,7 +182,11 @@ export function checkWritable(st: SettingsService | undefined): boolean {
 }
 
 /**
- * Write both provider dicts to the `llm-pi-ai` settings section.
+ * Write both provider dicts to the `llm-pi-ai` settings section, PRESERVING
+ * every other top-level key (schema-foreign keys that only this plugin or the
+ * operator keep at section level) — `settings.replace()` replaces the whole
+ * section, so a wholesale rewrite would silently drop them.
+ *
  * This is the only write path — every handler that modifies state calls this.
  */
 export async function writeSection(
@@ -115,7 +194,18 @@ export async function writeSection(
   providers: Record<string, ProviderProfile>,
   disabled: Record<string, ProviderProfile>,
 ): Promise<void> {
-  await st.replace(NS, makeHostPlain({ providers, disabledProviders: disabled }) as any)
+  const preserved: Record<string, unknown> = {}
+  try {
+    const section = st.get(NS) as Record<string, unknown> | undefined
+    if (section && typeof section === 'object') {
+      for (const k of Object.keys(section)) {
+        if (k === 'providers' || k === 'disabledProviders') continue
+        preserved[k] = section[k]
+      }
+    }
+  } catch { /* nothing to preserve */ }
+
+  await st.replace(NS, makeHostPlain({ ...preserved, providers, disabledProviders: disabled }) as any)
 }
 
 /**

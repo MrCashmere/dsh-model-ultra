@@ -20,7 +20,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        run: npm ci || true
+        run: npm ci
 
       - name: Verify package.json version matches tag
         run: |
@@ -32,6 +32,26 @@ jobs:
             echo "ERROR: Tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
             exit 1
           fi
+
+      - name: Build bundles (dist/host.js + dist/client.js)
+        run: npm run build
+
+      - name: Run smoke tests
+        run: npm test
+
+      - name: Verify entry artifacts exist
+        run: |
+          test -f dist/host.js || { echo "ERROR: dist/host.js missing after build"; exit 1; }
+          test -f dist/client.js || { echo "ERROR: dist/client.js missing after build"; exit 1; }
+          ls -la dist
+
+      - name: Pack and verify tarball contains dist/
+        run: |
+          npm pack
+          TARBALL=$(ls dsh-model-pro-*.tgz)
+          echo "Tarball: $TARBALL"
+          tar tzf "$TARBALL" | grep -q 'package/dist/host.js' || { echo "ERROR: dist/host.js not in tarball"; exit 1; }
+          tar tzf "$TARBALL" | grep -q 'package/dist/client.js' || { echo "ERROR: dist/client.js not in tarball"; exit 1; }
 
       - name: Publish to npm
         run: npm publish --access public

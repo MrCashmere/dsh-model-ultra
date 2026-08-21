@@ -64,17 +64,42 @@ function randomBytes(n: number): Uint8Array {
   return out
 }
 
-// --- base64 (btoa/atob are available on Node, in the browser, and injected
-// into the dynamic host sandbox) -------------------------------------------
+// --- base64 ----------------------------------------------------------------
+// Deliberately implemented by hand over raw bytes: the dynamic host sandbox
+// provides btoa/atob with UTF-8 semantics (Buffer.from(s,'utf-8')), NOT the
+// binary/Latin-1 semantics the Web assumes — feeding raw encrypted bytes
+// through them silently corrupts every byte >= 0x80. A manual lookup-table
+// encode/decode over Uint8Array is realm-independent and correct everywhere.
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 function toB64(bytes: Uint8Array): string {
-  let s = ''
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
-  return btoa(s)
+  let out = ''
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i]
+    const b = i + 1 < bytes.length ? bytes[i + 1] : NaN
+    const c = i + 2 < bytes.length ? bytes[i + 2] : NaN
+    out += B64_CHARS[a >> 2]
+    out += B64_CHARS[((a & 3) << 4) | (Number.isNaN(b) ? 0 : b >> 4)]
+    out += Number.isNaN(b) ? '=' : B64_CHARS[((b & 15) << 2) | (Number.isNaN(c) ? 0 : c >> 6)]
+    out += Number.isNaN(c) ? '=' : B64_CHARS[c & 63]
+  }
+  return out
 }
 function fromB64(b64: string): Uint8Array {
-  const s = atob(b64)
-  const out = new Uint8Array(s.length)
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i)
+  const clean = b64.replace(/=+$/, '')
+  const out = new Uint8Array(Math.floor((clean.length * 6) / 8))
+  let bits = 0
+  let val = 0
+  let n = 0
+  for (let i = 0; i < clean.length; i++) {
+    const idx = B64_CHARS.indexOf(clean[i])
+    if (idx < 0) continue
+    val = (val << 6) | idx
+    bits += 6
+    if (bits >= 8) {
+      bits -= 8
+      out[n++] = (val >> bits) & 0xff
+    }
+  }
   return out
 }
 
@@ -98,8 +123,11 @@ async function decryptBytes(key: Uint8Array, iv: Uint8Array, data: Uint8Array): 
 
 /**
  * Return the plugin's random AES-256 key, creating + storing it in the
- * credentials service on first use. Never regenerates an existing key — that
- * is what keeps decrypting old ciphertext working after a reinstall.
+ * credentials service on first use. Never regenerates a VALID key — that is
+ * what keeps decrypting old ciphertext working after a reinstall. A stored
+ * value that does not decode to exactly KEY_LEN bytes (e.g. written by an
+ * older build with the sandbox's UTF-8-semanics base64) is discarded and
+ * replaced, so the cipher never runs on a corrupted key.
  */
 export async function ensureEncKey(ctx: HostCtx): Promise<{ key: Uint8Array; ref: string } | null> {
   const creds = credsOf(ctx)
@@ -107,7 +135,10 @@ export async function ensureEncKey(ctx: HostCtx): Promise<{ key: Uint8Array; ref
   try {
     const existing = await creds.resolve(ENC_KEY_REF)
     if (existing && typeof existing.value === 'string' && existing.value) {
-      return { key: fromB64(existing.value), ref: ENC_KEY_REF }
+      try {
+        const key = fromB64(existing.value)
+        if (key.length === KEY_LEN) return { key, ref: ENC_KEY_REF }
+      } catch { /* fall through to create */ }
     }
   } catch { /* fall through to create */ }
 
