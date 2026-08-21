@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.1 — 2026-08-21
+
+- **Smart routing** — named routes aggregating multiple providers' models with 5
+  strategies (priority / weighted / round-robin / min-latency / sticky),
+  per-target weights and enable switches, `healthAware` dispatch, session
+  pinning, `maxFallbacks`, and per-target timeout
+- **Composite providers** — merge several providers' models into one virtual
+  provider with union / intersection modes (`composite / name::model`)
+- **Observability & probing** — per-target live health probes (up / down /
+  probing + consecutive-fail tracking) and a session-scoped request log with
+  by-route / by-target stats (calls, success rate, avg latency, tokens)
+- **Encrypted API keys** — paste a key in the GUI; stored AES-256-GCM encrypted
+  at rest with the master key held in the DSH credentials service (never
+  regenerated, so old ciphertext still decrypts after reinstall)
+- **Local wire-name mapping** — forward a mapped model name to the provider via
+  the stream-rewrite adapter
+- **Automated release** — `prepare` + `prepublishOnly` build hooks and
+  `scripts/release.mjs` one-command release; CI now builds, tests, and verifies
+  `dist/` is inside the npm tarball before publishing (fixes the missing-entry
+  artifact that broke 1.0.x installs)
+- **Docs** — rewritten bilingual README with features, screenshots, usage, and
+  install / uninstall guides
+
 ## 1.1.0
 
 - **Connectivity test** — new "Test" tab (and per-card Test button) runs a tiny
