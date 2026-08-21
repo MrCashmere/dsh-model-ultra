@@ -83,11 +83,7 @@ dsh plugin --profile web add wqy8593521/dsh-model-pro
 
 安装后重新打开（或刷新）DSH Web GUI，左侧「设置」中即出现「**模型 Pro**」入口。
 
-### 方式三：作为动态 Cordis 插件运行
-
-本插件也可在 DSH 会话内作为动态插件临时加载：用 `dist/host.js` 与 `dist/client.js` 两半的源码调用 `cordis_define`，再用 `cordis_run` 激活即可。
-
-### 方式四：从源码构建
+### 方式三：从源码构建
 
 ```sh
 git clone https://github.com/wqy8593521/dsh-model-pro.git
@@ -97,6 +93,10 @@ npm run build       # 输出 dist/host.js + dist/client.js
 npm test            # 运行冒烟测试（可选）
 ```
 
+> 本插件以**静态 bundle** 形态分发（Host 半为 ESM `apply` 导出，Client 半为
+> `window.__ModuleLoader__.load` 工厂），必须通过 `dsh plugin add` 安装；
+> 它不提供旧版动态插件（`cordis_define` / `cordis_run`）的加载形态。
+
 ---
 
 ## 🗑️ 卸载教程（Uninstall）
@@ -105,7 +105,7 @@ npm test            # 运行冒烟测试（可选）
 dsh plugin --profile web remove dsh-model-pro
 ```
 
-**卸载是安全的**：插件在卸载 / 禁用时会自行监听自己的卸载事件，把 `disabledProviders` 里的每个提供商（模型、请求头、凭据全部保留）还原回 `providers`。因此**不会有任何提供商或模型配置丢失**。加密 API Key 的主密钥存放在 DSH 凭据服务中、与插件解耦，卸载不会删除它——重装后旧密文仍可正常解密。
+**卸载是安全的**：插件在卸载 / 禁用时会执行 fiber 清理钩子，把 `disabledProviders` 里的每个提供商（模型、请求头、凭据全部保留）还原回 `providers`。因此**不会有任何提供商或模型配置丢失**。加密 API Key 的主密钥存放在 DSH 凭据服务中、与插件解耦，卸载不会删除它——重装后旧密文仍可正常解密。
 
 > 若只想临时停用而保留定义，用禁用而非卸载即可；两者都会触发同样的还原逻辑。
 
@@ -131,7 +131,7 @@ dsh plugin --profile web remove dsh-model-pro
 ### 禁用 & 卸载还原
 禁用会把提供商配置从 `llm-pi-ai.providers` 移入 `llm-pi-ai.disabledProviders`。由于 `llm-pi-ai` 适配器只解析 `providers` 字典，被禁用的提供商会从模型选择器中消失；schemastery 的非严格对象解析器会在设置校验中保留这个未知键。
 
-因为 `disabledProviders` 是 schema 外来键，Host 半会监听自身卸载（`dispose`，插件被卸载**或**禁用），执行禁用操作的逆运算：把每个被禁用的提供商连同完整档案还原回 `providers`。启用中的提供商不受影响。
+因为 `disabledProviders` 是 schema 外来键，Host 半在 fiber 清理时（插件被卸载**或**禁用）执行禁用操作的逆运算：把每个被禁用的提供商连同完整档案还原回 `providers`。启用中的提供商不受影响。
 
 ### 密钥加密
 提供商 API Key 存于两处：**权威副本**在 DSH `credentials` 服务（`llm-pi-ai` 请求时解析）；**静态快照**为 `profile.apiKeyEnc` 下的 AES-256-GCM 密文。随机 AES 主密钥仅生成一次并存入凭据服务，**永不重新生成**，保证重装后旧密文仍可解密。沙箱缺少 WebCrypto 时回退到打包的纯 JS `@noble/ciphers`。
@@ -143,12 +143,16 @@ dsh plugin --profile web remove dsh-model-pro
 Host 半用 `makeHostPlain()` 以 `Object.create(null)`（无原型）递归重建对象，确保跨 vm 沙箱 realm 边界通过 `dsh-settings` 的 `isPlainObject` 校验。
 
 ### 构建系统
-TypeScript 源码经 [tsup](https://tsup.egoist.dev/)（esbuild）编译为单文件 IIFE 包，输出无 `require` / `import` 的自包含 JS，可直接用于 Cordis 沙箱。
+TypeScript 源码经 [esbuild](https://esbuild.github.io/)（`scripts/build.mjs`）产出两个静态 bundle：
+`dist/host.js` 为 **ESM**（导出 `apply` / `name` / `inject`，DSH 加载器直接 `import`），框架
+包（`@deepseek-ai/*`）保持 external、由 Profile 运行时解析；`dist/client.js` 为包在
+`window.__ModuleLoader__.load({ id, factory })` 工厂里的 **CJS**，`react` 由 DSH 客户端
+模块系统提供。Host↔Client RPC 走 **Typert Remote 服务**（契约见 `src/shared/contract.ts`）。
 
 | 文件 | 说明 |
 |------|------|
-| `dist/host.js` | Host 侧包（RPC handlers） |
-| `dist/client.js` | Client 侧包（设置 UI） |
+| `dist/host.js` | Host 侧包：`modelPro` Typert Remote 服务 + 路由/组合/健康/观测 |
+| `dist/client.js` | Client 侧包：设置页 UI（`__ModuleLoader__` 工厂） |
 | `cordis.patch.yml` | `dsh plugin add` 使用的 Cordis 组合补丁 |
 | `package.json` | 含 `dsh.bundle` 清单的 npm 包元数据 |
 
@@ -160,24 +164,27 @@ TypeScript 源码经 [tsup](https://tsup.egoist.dev/)（esbuild）编译为单�
 src/
 ├── shared/
 │   ├── constants.ts          # NS、PROTOS、EDITABLE_FIELDS、路由/组合/观测键
-│   └── types.ts              # 共享 TypeScript 接口
+│   ├── types.ts              # 共享 TypeScript 接口
+│   ├── contract.ts           # Typert 契约：INVOCATIONS + TYPERT_MANIFEST（23 方法）
+│   └── externals.d.ts        # 框架 peer 包的 ambient 类型（tsc 用）
 ├── host/
-│   ├── index.ts              # apply(ctx) — 注册所有 harness.handle
+│   ├── index.ts              # apply(ctx) — Typert 注册 + 路由/组合/健康/观测装配
+│   ├── service.ts            # ModelProRuntime extends TypertRemoteService
 │   ├── utils.ts              # makeHostPlain、readProviders、writeSection
 │   ├── crypto.ts             # AES-256-GCM 密钥加解密（凭据服务主密钥）
-│   ├── lifecycle.ts          # dispose 钩子 — 卸载时还原禁用提供商
+│   ├── lifecycle.ts          # fiber 清理钩子 — 卸载时还原禁用提供商
 │   ├── router.ts             # 智能路由分发引擎（router / composite 适配器）
 │   ├── composite.ts          # 组合提供商（并集 / 交集）解析
 │   ├── health.ts             # 目标健康追踪（探活）
 │   ├── statsStore.ts         # 会话内请求日志 + 统计
 │   ├── streamRewrite.ts      # 本地转发名映射
-│   └── handlers/             # 每个 RPC handler 一个文件
+│   └── handlers/             # 每个业务 handler 一个文件
 │       ├── list.ts / get.ts / create.ts / delete.ts
 │       ├── toggle.ts / updateField.ts / updateHeaders.ts
 │       ├── updateKey.ts / applyModels.ts / discover.ts / test.ts
 │       ├── routes.ts / composites.ts / observability.ts
 ├── client/
-│   ├── index.tsx             # apply(ctx) — 注册 settings.section Slot
+│   ├── index.tsx             # apply(ctx) — remote $mount + settings.section Slot
 │   ├── i18n.ts               # ZH / EN 字典
 │   ├── styles.ts             # CSS 字符串
 │   ├── labels.ts / rpc.ts / react.ts
@@ -189,8 +196,11 @@ src/
 │       ├── OverviewPanel.tsx / HeadersPanel.tsx / ModelsPanel.tsx
 │       ├── TestPanel.tsx / RoutesPanel.tsx
 tests/                        # host + client 冒烟测试
-dist/                         # 构建输出（gitignored）
-tsconfig.json · tsup.config.ts · package.json
+dist/                         # 构建输出（gitignored，随 npm 包发布）
+scripts/
+├── build.mjs                 # esbuild：host ESM + client __ModuleLoader__ 工厂
+└── release.mjs               # 一键发版：bump + CHANGELOG + tag + push
+tsconfig.json · package.json
 ```
 
 ---

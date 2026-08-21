@@ -1,20 +1,43 @@
 /**
- * dsh-model-pro — Client half entry point.
+ * dsh-model-pro — Client half entry point (static-bundle mode).
  *
- * Registers a `settings.section` Slot that renders the Model Pro settings page.
- * The locale dictionaries (ZH/EN) and CSS are injected once; all data operations
- * go through host.call() RPC to the Host half.
+ * Exports a Cordis `apply(ctx)` that:
+ *   - registers ZH/EN locale dictionaries,
+ *   - injects the page CSS (no `styles` closure in static mode — we adopt a
+ *     <style> element directly),
+ *   - mounts the `modelPro` Typert Remote service through the API Gateway
+ *     (ctx.remote.$mount) and resolves its handle via ctx.reflect, and
+ *   - registers the settings.section Slot rendering ModelProPage.
+ *
+ * All data operations go through the mounted remote (see rpc.ts).
  */
 
 import { CLIENT_NS, ZH, EN } from './i18n'
 import { CSS } from './styles'
 import { createCall } from './rpc'
 import { ModelProPage } from './components/ModelProPage'
+import { INVOCATIONS, PACKAGE, SERVICE_KEY } from '../shared/contract'
 import type { TFunc } from '../shared/types'
 import React from './react'
 
+/** Loader entry id / bundle id. */
+export const name = PACKAGE
+
+/** Client services this plugin reads. */
+export const inject = ['slots', 'remote', 'locale']
+
+const STYLE_ID = 'dsh-model-pro-styles'
+
+function adoptStyles(cssText: string) {
+  if (document.getElementById(STYLE_ID) !== null) return
+  const style = document.createElement('style')
+  style.id = STYLE_ID
+  style.textContent = cssText
+  document.head.appendChild(style)
+}
+
 export function apply(ctx: any) {
-  const locale = ctx.get('locale') || ctx.locale
+  const locale = ctx.get('locale') ?? ctx.locale
   if (locale !== undefined) {
     ctx.effect(() => {
       try {
@@ -27,12 +50,27 @@ export function apply(ctx: any) {
 
   const t: TFunc = locale !== undefined ? locale.bind(CLIENT_NS) : (k: string) => k
 
-  // `styles` is injected as a closure parameter by the Cordis client runner.
-  styles.insert(CSS)
+  adoptStyles(CSS)
 
-  const call = createCall(t)
+  // Mount the remote service and resolve its handle. The handle appears under
+  // reflect key `remote.<SERVICE_KEY>` once $mount resolves.
+  let remote: Record<string, (args: unknown) => Promise<any>> | null = null
+  ctx.effect(async () => {
+    const dispose = await ctx.remote.$mount({ package: PACKAGE, descriptors: INVOCATIONS })
+    const handle = ctx.reflect.get(`remote.${SERVICE_KEY}`)
+    if (handle === undefined) {
+      throw new Error(`dsh-model-pro: the ${SERVICE_KEY} Remote namespace did not mount`)
+    }
+    remote = handle
+    return () => {
+      remote = null
+      void dispose()
+    }
+  }, 'dsh-model-pro: remote')
 
-  const slots = ctx.get('slots') || ctx.slots
+  const call = createCall(t, () => remote)
+
+  const slots = ctx.get('slots') ?? ctx.slots
   if (slots === undefined) return
 
   slots.inject('settings.section', () => {

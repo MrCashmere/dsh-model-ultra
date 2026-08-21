@@ -93,24 +93,39 @@ function createLlm(log = []) {
 }
 
 // ---------------------------------------------------------------------------
-// load the bundle like the DSH host runner does
+// load the bundle like the DSH host loader does
+//
+// Static-bundle mode: dist/host.js is an ESM module that imports
+// TypertRemoteService and exports apply/name/inject. The RPC surface is the
+// ModelProRuntime service instance created inside apply(). We evaluate the
+// bundle in a vm with a stub TypertRemoteService that captures the instance,
+// then invoke its camelCase methods (kebab RPC names map to camel via the
+// same rule the contract uses).
 // ---------------------------------------------------------------------------
+const kebabToCamel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+
 async function loadHost() {
-  const code = readFileSync(HOST_BUNDLE, 'utf8')
-  // btoa/atob are injected by the real host sandbox too; deliberately no
-  // `crypto` here so the smoke exercises the bundled pure-JS AES fallback
-  // (the dynamic sandbox withholds WebCrypto).
-  // No `crypto`, and deliberately NO btoa/atob here either — the plugin's base64
-  // is implemented by hand and must not depend on either. TextEncoder/Decoder
-  // are injected by the real host sandbox too.
-  const sandbox = { console, setTimeout, clearTimeout, Date, Promise, AbortController, TextEncoder, TextDecoder }
+  let code = readFileSync(HOST_BUNDLE, 'utf8')
+  // Strip the ESM import (stubbed below) and the trailing `export { ... }`.
+  code = code.replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']@deepseek-ai\/dsh-typert-protocol["'];?/m, '')
+  code = code.replace(/export\s*\{[\s\S]*?\};?\s*$/m, '')
+
+  const captured = []
+  const sandbox = {
+    console, setTimeout, clearTimeout, Date, Promise, AbortController,
+    TextEncoder, TextDecoder,
+    // stub base: capture each runtime instance so the test can invoke methods
+    TypertRemoteService: class {
+      constructor(ctx) { this.ctx = ctx; captured.push(this) }
+    },
+  }
   sandbox.globalThis = sandbox
-  sandbox.harness = { handle: (name, fn) => { sandbox.handles[name] = fn } }
-  sandbox.handles = {}
-  const result = await vm.runInContext(`(async () => { ${code} })()`, vm.createContext(sandbox), {
-    filename: 'cordis-dyn-host.js',
-  })
-  return { apply: (result.apply ? result : result.default).apply, handles: sandbox.handles }
+  const result = await vm.runInContext(
+    `(async () => { ${code}\n; return { apply, name, inject }; })()`,
+    vm.createContext(sandbox),
+    { filename: 'model-pro-host.js' },
+  )
+  return { apply: result.apply, runtimes: captured }
 }
 
 function assert(cond, msg) {
@@ -140,14 +155,18 @@ const ctx = {
         : name === 'credentials' ? creds
           : undefined
   ),
+  // Typert registry stub: apply() registers its manifest through this.
+  typert: { register: () => () => {} },
   on: (name, fn) => { (listeners[name] = listeners[name] || []).push(fn); return () => {} },
   effect: (fn) => { const c = fn(); if (typeof c === 'function') cleanups.push(c) },
 }
-const { apply, handles } = await loadHost()
+const { apply, runtimes } = await loadHost()
 apply(ctx)
 
-const H = handles
-const P = async (name, args) => H[name](args || {})
+// The RPC surface is the captured ModelProRuntime instance. Drive it by the
+// same kebab method names the client uses; each maps to a camelCase method.
+const runtime = () => runtimes[runtimes.length - 1]
+const P = async (name, args) => runtime()[kebabToCamel(name)](args || {})
 const provs = () => store.doc().providers || {}
 const dis = () => store.doc().disabledProviders || {}
 

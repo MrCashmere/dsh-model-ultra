@@ -1,12 +1,15 @@
 /**
- * Client half structural smoke test.
+ * Client half structural smoke test (static-bundle mode).
  *
- * Loads the REAL built `dist/client.js` into a vm sandbox with the same
- * injected globals the Cordis client runner provides (React, styles, host,
- * slots, locale), then renders the registered `settings.section` slot through
- * a tiny React renderer that executes hooks and effects against mocked data.
- * Asserts the redesigned dashboard (segments + state-rail cards, active and
- * disabled) constructs without throwing.
+ * Loads the REAL built `dist/client.js`. In static-bundle mode that file is a
+ * `window.__ModuleLoader__.load({ id, factory })` call; the factory receives a
+ * synchronous `require` and returns the CJS module (exporting apply). We
+ * provide `require` (React + externals), a minimal `document` for CSS
+ * adoption, and a `ctx` whose `remote.$mount` + `reflect.get` expose a mocked
+ * `modelPro` remote. The remote's methods return the Gateway envelope
+ * `{ ok, value }` wrapping the business `{ ok, ... }` payload — exactly what
+ * rpc.ts unwraps. Then renders the registered `settings.section` slot through
+ * a tiny React renderer and asserts the redesigned dashboard constructs.
  *
  * Run: `npm test`  (build must be current: `npm run build`)
  */
@@ -128,21 +131,36 @@ const testProviders = [
   { route: 'my-gw', displayName: 'My Gateway', declared: true, api: 'anthropic-messages', baseURL: 'https://gw.example.com/v1', apiKeyEnv: '', disabled: true, hasHeaders: false, headerCount: 0, modelCount: 0, usesCatalog: true },
 ]
 
-const host = {
-  call: async (method, payload) => {
-    if (method === 'list-providers') return { ok: true, providers: testProviders, protocols: ['openai-completions', 'openai-responses', 'anthropic-messages'], writable: true }
-    if (method === 'list-routes') return { ok: true, routes: { auto: { strategy: 'priority', targets: [{ provider: 'deepseek', model: 'deepseek-chat' }] } } }
-    if (method === 'get-provider') return { ok: true, models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }], availableModels: [] }
-    if (method === 'list-composites') return { ok: true, composites: {} }
-    if (method === 'get-route-stats') return {
-      ok: true,
-      byRoute: { 'auto': { calls: 12, errors: 1, latencySum: 4800, latencyN: 12, tokensIn: 100, tokensOut: 200 } },
-      byTarget: { 'deepseek\u0000deepseek-chat': { calls: 12, errors: 1, latencySum: 4800, latencyN: 12, tokensIn: 100, tokensOut: 200 } },
-      health: { 'deepseek\u0000deepseek-chat': { provider: 'deepseek', model: 'deepseek-chat', status: 'up', latencyMs: 400, consecutiveFails: 0, lastProbeAt: 1700000000000 } },
-    }
-    if (method === 'list-request-logs') return { ok: true, entries: [{ ts: 1700000000000, route: 'auto', target: { provider: 'deepseek', model: 'deepseek-chat' }, status: 'ok', tryIndex: 1, latencyMs: 400, tokens: { in: 100, out: 200 } }] }
-    return { ok: true }
-  },
+// ---------------------------------------------------------------------------
+// mocked remote: camelCase methods returning the Gateway envelope
+// { ok, value } wrapping the business { ok, ... } payload.
+// ---------------------------------------------------------------------------
+const businessFor = (method, payload) => {
+  if (method === 'listProviders') return { ok: true, providers: testProviders, protocols: ['openai-completions', 'openai-responses', 'anthropic-messages'], writable: true }
+  if (method === 'listRoutes') return { ok: true, routes: { auto: { strategy: 'priority', targets: [{ provider: 'deepseek', model: 'deepseek-chat' }] } } }
+  if (method === 'getProvider') return { ok: true, models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }], availableModels: [] }
+  if (method === 'listComposites') return { ok: true, composites: {} }
+  if (method === 'getRouteStats') return {
+    ok: true,
+    byRoute: { 'auto': { calls: 12, errors: 1, latencySum: 4800, latencyN: 12, tokensIn: 100, tokensOut: 200 } },
+    byTarget: { 'deepseek\u0000deepseek-chat': { calls: 12, errors: 1, latencySum: 4800, latencyN: 12, tokensIn: 100, tokensOut: 200 } },
+    health: { 'deepseek\u0000deepseek-chat': { provider: 'deepseek', model: 'deepseek-chat', status: 'up', latencyMs: 400, consecutiveFails: 0, lastProbeAt: 1700000000000 } },
+  }
+  if (method === 'listRequestLogs') return { ok: true, entries: [{ ts: 1700000000000, route: 'auto', target: { provider: 'deepseek', model: 'deepseek-chat' }, status: 'ok', tryIndex: 1, latencyMs: 400, tokens: { in: 100, out: 200 } }] }
+  return { ok: true }
+}
+
+// The remote handle: one async method per camelCase RPC name.
+const remoteMethods = [
+  'listProviders', 'toggleProvider', 'getProvider', 'discoverModels', 'createProvider',
+  'deleteProvider', 'updateField', 'updateHeaders', 'applyModels', 'testProvider',
+  'setApiKey', 'listRoutes', 'setRoute', 'deleteRoute', 'listComposites', 'setComposite',
+  'deleteComposite', 'previewComposite', 'getRouteStats', 'listRequestLogs',
+  'clearRequestLogs', 'probeTarget', 'probeAll',
+]
+const remoteHandle = {}
+for (const m of remoteMethods) {
+  remoteHandle[m] = async (payload) => ({ ok: true, value: businessFor(m, payload) })
 }
 
 const structures = []
@@ -162,7 +180,24 @@ const ctx = {
     }
     return undefined
   },
-  effect: (fn) => { const c = fn(); if (typeof c === 'function') c() },
+  // API Gateway remote surface used by the static-bundle client.
+  remote: { $mount: async () => () => {} },
+  reflect: { get: (key) => (key === 'remote.modelPro' ? remoteHandle : undefined) },
+  effect: (fn) => { const c = fn(); if (typeof c === 'function') c(); return c },
+}
+
+// document shim for adoptStyles() (the client injects a <style> element).
+const documentShim = {
+  getElementById: () => null,
+  createElement: () => ({ set textContent(v) { structures.push(v) }, get textContent() { return '' } }),
+  head: { appendChild: () => {} },
+}
+
+// Synchronous require the __ModuleLoader__ factory expects.
+const requireShim = (spec) => {
+  if (spec === 'react') return fake
+  if (spec === 'react-dom' || spec === 'react/jsx-runtime') return {}
+  throw new Error(`client smoke: unexpected require(${spec})`)
 }
 
 const sandbox = {
@@ -171,21 +206,32 @@ const sandbox = {
   setTimeout,
   clearTimeout,
   Date,
-  React: fake,
-  styles: { insert: (css) => structures.push(css) },
-  host,
+  document: documentShim,
+  window: {},
 }
 sandbox.globalThis = sandbox
+// The factory registers itself here; capture it.
+let captured = null
+sandbox.window.__ModuleLoader__ = {
+  load: ({ id, factory }) => { captured = { id, factory } },
+}
 
 const code = readFileSync(CLIENT_BUNDLE, 'utf8')
-const result = await vm.runInContext(`(async () => { ${code} })()`, vm.createContext(sandbox), { filename: 'cordis-dyn-client.js' })
-const plugin = result.apply ? result : result.default
+vm.runInContext(code, vm.createContext(sandbox), { filename: 'model-pro-client.js' })
+assert(captured && captured.id === 'dsh-model-pro', 'client bundle registered under its package id')
+const moduleExports = captured.factory(requireShim)
+const plugin = moduleExports.apply ? moduleExports : moduleExports.default
 plugin.apply(ctx)
 
 assert(typeof slotRender === 'function', 'settings.section slot rendered')
 assert(typeof slotLabel?.label === 'function', 'slot label registered')
 
-// render the dashboard; allow the async refresh() to settle (the fake host
+// let the async remote $mount effect resolve so `remote` is wired before the
+// dashboard's first refresh() fires (the client mounts the remote in an async
+// effect; reflect.get is synchronous but the await yields a microtask).
+await new Promise((r) => setTimeout(r, 10))
+
+// render the dashboard; allow the async refresh() to settle (the fake remote
 // call resolves on a macrotask, not just the microtask queue)
 const out = []
 fake.rerender = () => {}
