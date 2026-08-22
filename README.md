@@ -227,6 +227,10 @@ tsconfig.json · package.json
 
 见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 🔗 友情链接
+
+- [Linux.do](https://linux.do/) — 真诚、友好、团结的 Linux 与开发者社区。
+
 ## License
 
 [MIT](LICENSE)
