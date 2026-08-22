@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.5 — 2026-08-22
+
+- feat: add custom model management and search functionality in ModelsPanel
+
 ## 1.1.4 — 2026-08-21
 
 - fix: drop default export so loader keeps name/inject named exports
