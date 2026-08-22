@@ -301,5 +301,44 @@ renderAt(tree, fake, 'root', outP)
 assert(outP.some((n) => String(n.className).includes('mpro-hdotUp')), 'probe tab renders health dots')
 assert(outP.some((n) => /probeProbe/i.test(n.text || '')), 'probe tab renders per-target probe buttons')
 
+// -- models tab: search inputs, custom-model add form, current-list bulk ops --
+// back to the providers dashboard first
+const provTab = outP.find((n) => n.tag === 'button' && /tabProviders/i.test(n.text || ''))
+assert(provTab && typeof provTab.onClick === 'function', 'providers tab clickable')
+provTab.onClick()
+const outD = []
+renderAt(tree, fake, 'root', outD)
+await new Promise((r) => setTimeout(r, 10))
+renderAt(tree, fake, 'root', outD)
+// open the editor for the first provider card
+const editBtn = outD.find((n) => n.tag === 'button' && /^edit$/i.test((n.text || '').trim()))
+assert(editBtn && typeof editBtn.onClick === 'function', 'provider card Edit button present')
+editBtn.onClick()
+const outE = []
+renderAt(tree, fake, 'root', outE)
+await new Promise((r) => setTimeout(r, 10))
+renderAt(tree, fake, 'root', outE)
+// switch to the Models tab
+const modelsTab = outE.find((n) => n.tag === 'button' && /tabModels/i.test(n.text || ''))
+assert(modelsTab && typeof modelsTab.onClick === 'function', 'models tab clickable')
+modelsTab.onClick()
+const outM = []
+renderAt(tree, fake, 'root', outM)
+await new Promise((r) => setTimeout(r, 10))
+renderAt(tree, fake, 'root', outM)
+const searchInputs = outM.filter((n) => n.tag === 'input' && String(n.className).includes('mpro-searchInput'))
+assert(searchInputs.length >= 1, `models tab renders search input(s), got ${searchInputs.length}`)
+assert(outM.some((n) => n.tag === 'button' && /^selectAll$/i.test((n.text || '').trim())), 'current list renders select-all')
+// open the add-model form and assert its fields + submit button render
+const addToggle = outM.find((n) => n.tag === 'button' && /addModelToggle|addModelHide/i.test(n.text || ''))
+assert(addToggle && typeof addToggle.onClick === 'function', 'custom-model add toggle present')
+addToggle.onClick()
+const outA = []
+renderAt(tree, fake, 'root', outA)
+await new Promise((r) => setTimeout(r, 10))
+renderAt(tree, fake, 'root', outA)
+assert(outA.some((n) => String(n.className).includes('mpro-addBar')), 'add-model form panel renders')
+assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || '')), 'add-model submit button renders')
+
 console.log('PASS: client structural smoke — slot registered and redesigned dashboard rendered')
 console.log('  nodes:', out.length, '| classes seen:', [...allClassNames].filter((c) => c.includes('mpro-')).slice(0, 8).join(', '))

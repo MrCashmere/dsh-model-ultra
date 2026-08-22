@@ -93,6 +93,22 @@ npm run build       # 输出 dist/host.js + dist/client.js
 npm test            # 运行冒烟测试（可选）
 ```
 
+### 方式四：本地开发联调（软链安装，不发版）
+
+在插件仓库根目录一键把**本工作区**软链进 Profile（等价于 `dsh plugin --profile web add link:<本目录>`，不拷贝、不触发 prepare 构建脚本，不受 pnpm 10 allowBuilds 限制）：
+
+```sh
+npm run install:local                  # 构建 + 软链安装到 ~/.dsh/profiles/web
+npm run install:local -- --profile dev # 指定其他 Profile
+npm run install:local -- --no-build    # dist 已是最新时跳过构建
+```
+
+之后的迭代循环：改代码 → `npm run build` → 重启 dsh / 刷新 Web GUI。回退 registry 版本：
+
+```sh
+dsh plugin --profile web remove dsh-model-pro && dsh plugin --profile web add npm:dsh-model-pro
+```
+
 > 本插件以**静态 bundle** 形态分发（Host 半为 ESM `apply` 导出，Client 半为
 > `window.__ModuleLoader__.load` 工厂），必须通过 `dsh plugin add` 安装；
 > 它不提供旧版动态插件（`cordis_define` / `cordis_run`）的加载形态。

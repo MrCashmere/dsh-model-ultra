@@ -123,6 +123,10 @@ export const CSS = [
 
   // ---------- models ----------
   '.mpro-discoverBar{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;padding:12px 14px;border:1px dashed var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-base)}',
+  '.mpro-searchInput{flex:1 1 160px;min-width:150px;max-width:280px;height:28px;font-size:11.5px}',
+  '.mpro-addBar{margin-top:8px;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-base);display:flex;flex-direction:column;gap:10px}',
+  '.mpro-addBarHead{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}',
+  '.mpro-addBarRow{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}',
   '.mpro-modelBar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
   '.mpro-modelBar .mpro-right{margin-left:auto}',
   '.mpro-chipSel{background:var(--dsw-alias-brand-primary-alpha-15,rgba(99,102,241,.13));color:var(--dsw-alias-brand-primary);border-color:transparent}',
