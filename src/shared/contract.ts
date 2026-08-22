@@ -49,6 +49,8 @@ export const METHODS: ReadonlyArray<readonly [string, string]> = [
   ['clear-request-logs', 'clearRequestLogs'],
   ['probe-target', 'probeTarget'],
   ['probe-all', 'probeAll'],
+  ['get-ui-prefs', 'getUiPrefs'],
+  ['set-ui-prefs', 'setUiPrefs'],
 ] as const
 
 /** Client-facade kebab → camel map. */

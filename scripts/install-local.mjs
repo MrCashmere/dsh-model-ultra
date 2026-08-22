@@ -64,16 +64,20 @@ if (!noBuild) {
   die('--no-build 但 dist/ 缺失，先去掉 --no-build 跑一次构建。')
 }
 
-// --- 2. pnpm add link:<root> ----------------------------------------------
+// --- 2. dsh plugin add link:<root> ------------------------------------------
+// 必须走 `dsh plugin add`（而非裸 pnpm add）：它在 pnpm 安装之后还会执行
+// reconcilePlugins——把声明了 dsh.bundle 的依赖追加进 profile 的
+// dsh.profile.bundles 层清单。裸 pnpm add 只装不登记，host 永远不会加载
+// （表现为「已安装，未生效」，GUI 误判为纯客户端插件走市场挂载）。
 const spec = `link:${root}`
-step(`在 ${profileDir} 执行 pnpm add ${spec} …`)
-const add = spawnSync('pnpm', ['add', spec], {
+step(`执行 dsh plugin --profile ${profileName} add ${spec} …`)
+const add = spawnSync('dsh', ['plugin', '--profile', profileName, 'add', spec], {
   cwd: profileDir,
   stdio: 'inherit',
   shell: process.platform === 'win32',
 })
-if (add.error?.code === 'ENOENT') die('PATH 上找不到 pnpm —— 请先安装 pnpm。')
-if (add.status !== 0) die(`pnpm add 失败（exit ${add.status ?? '?'}）。`)
+if (add.error?.code === 'ENOENT') die('PATH 上找不到 dsh —— 请先全局安装 @deepseek-ai/dsh。')
+if (add.status !== 0) die(`dsh plugin add 失败（exit ${add.status ?? '?'}）。`)
 
 // --- 3. verify --------------------------------------------------------------
 const installed = path.join(profileDir, 'node_modules', name)

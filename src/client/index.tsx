@@ -16,6 +16,7 @@ import { CLIENT_NS, ZH, EN } from './i18n'
 import { CSS } from './styles'
 import { createCall } from './rpc'
 import { ModelProPage } from './components/ModelProPage'
+import { registerRouteBadge } from './components/RouteBadge'
 import { INVOCATIONS, PACKAGE, SERVICE_KEY } from '../shared/contract'
 import type { TFunc } from '../shared/types'
 import React from './react'
@@ -79,6 +80,12 @@ export function apply(ctx: any) {
       () => React.createElement(ModelProPage, { t, call }),
     )
   })
+
+  // Conversation badge: under each completed turn, show which provider/model
+  // actually served it (smart routes + composites only). No-op on hosts that
+  // don't declare the turnTail slot. The bound `t` is passed explicitly so the
+  // badge never renders raw dictionary keys.
+  registerRouteBadge(slots, call, t)
 }
 
 // NOTE: no `default` export here — the loader's unwrapExports prefers a

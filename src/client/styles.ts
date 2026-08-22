@@ -244,6 +244,16 @@ export const CSS = [
   '.mpro-pagerBtns{display:flex;align-items:center;gap:5px}',
   '.mpro-pagerPos{font-size:11.5px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding:0 6px;min-width:56px;text-align:center}',
 
+  // conversation turnTail badge (served-by provider)
+  '.mpro-badgeRow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0 0;font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+  '.mpro-badgeIcon{font-size:11px;line-height:1;color:var(--dsw-alias-label-quaternary)}',
+  '.mpro-badgeLabel{font-size:10.5px;letter-spacing:.02em}',
+  '.mpro-badgeChip{display:inline-flex;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:1px 8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:10.5px;line-height:16px}',
+  '.mpro-badgeChipMono{font-family:var(--mpro-monospace)}',
+  '.mpro-badgeChipRoute{border-style:dashed;color:var(--dsw-alias-brand-primary)}',
+  '.mpro-badgeFb{color:var(--dsw-alias-state-success-primary);font-weight:600}',
+  '.mpro-badgeFbText{font-size:10.5px;color:var(--dsw-alias-state-success-primary)}',
+
   // ---------- responsive & motion ----------
   '@media(max-width:640px){.mpro-grid2,.mpro-overviewGrid,.mpro-testRow{grid-template-columns:1fr}.mpro-hdrRow{grid-template-columns:120px 1fr 28px}.mpro-pc{flex-wrap:wrap}.mpro-pcActions{width:100%;justify-content:flex-start}}',
   '@media(prefers-reduced-motion:reduce){.mpro-btn,.mpro-pc,.mpro-input,.mpro-seg,.mpro-tab,.mpro-spin{transition:none;animation:none}}',

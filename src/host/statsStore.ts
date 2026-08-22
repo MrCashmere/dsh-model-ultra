@@ -111,6 +111,9 @@ export interface StatsRecorder {
     tryIndex: number
     sessionId?: string
     error?: string
+    /** Explicit log status override — e.g. 'fallback' for a call that only
+     * succeeded on tryIndex > 1. Defaults to ok ? 'ok' : 'error'. */
+    status?: RequestLogEntry['status']
   }): void
   byRoute(): Record<string, RouteStats>
   byTarget(): Record<string, RouteStats>
@@ -125,7 +128,7 @@ export function createStatsRecorder(): StatsRecorder {
     m[k] = accumulateStats(cur, opts)
   }
   return {
-    record({ route, provider, model, ok, latencyMs, tokensIn, tokensOut, tryIndex, sessionId, error }) {
+    record({ route, provider, model, ok, latencyMs, tokensIn, tokensOut, tryIndex, sessionId, error, status }) {
       bump(byRoute, route, { ok, latencyMs, tokensIn, tokensOut })
       bump(byTarget, `${provider}\u0000${model}`, { ok, latencyMs, tokensIn, tokensOut })
       getLogRing().push({
@@ -133,7 +136,7 @@ export function createStatsRecorder(): StatsRecorder {
         ...(sessionId ? { sessionId } : {}),
         route,
         target: { provider, model },
-        status: ok ? 'ok' : 'error',
+        status: status || (ok ? 'ok' : 'error'),
         tryIndex,
         latencyMs,
         tokens: {

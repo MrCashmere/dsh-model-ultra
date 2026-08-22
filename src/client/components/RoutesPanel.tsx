@@ -646,6 +646,28 @@ export function ObservabilityPanel({ t, call }: { t: TFunc; call: CallFn }) {
   const [pageSize, setPageSize] = React.useState(20)
   const [page, setPage] = React.useState(0)
   const [expanded, setExpanded] = React.useState<Set<number>>(new Set())
+  // Conversation badge preference (persisted host-side under llm-pi-ai[uiPrefs]).
+  const [showBadge, setShowBadge] = React.useState<boolean | null>(null)
+
+  React.useEffect(() => {
+    void (async () => {
+      try {
+        const r = await call('get-ui-prefs')
+        setShowBadge(r?.prefs?.showRouteBadge !== false)
+      } catch { /* default stays on */ }
+    })()
+  }, [call])
+
+  const toggleBadge = async () => {
+    const next = !(showBadge !== false)
+    setShowBadge(next)
+    try {
+      await call('set-ui-prefs', { prefs: { showRouteBadge: next } })
+      setMsg(t('uiPrefsSaved'))
+    } catch (e) {
+      setMsg(t('uiPrefsErr') + String((e as Error)?.message || e))
+    }
+  }
 
   const refresh = React.useCallback(async () => {
     try {
@@ -716,6 +738,14 @@ export function ObservabilityPanel({ t, call }: { t: TFunc; call: CallFn }) {
           <p className="mpro-hint" style={{ marginTop: 2 }}>{t('obsHint')}</p>
         </div>
         <div className="mpro-routeActions">
+          <label className="mpro-toggleCk" title={t('uiShowBadgeHint')} style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={showBadge !== false}
+              onChange={() => void toggleBadge()}
+            />
+            {t('uiShowBadge')}
+          </label>
           <button className="mpro-btn mpro-btnSm" onClick={() => void refresh()}>{t('obsReload')}</button>
           <button className="mpro-btn mpro-btnSm mpro-btnDanger" onClick={() => void clear()}>{t('obsClearLogs')}</button>
         </div>

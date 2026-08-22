@@ -135,6 +135,7 @@ const testProviders = [
 // mocked remote: camelCase methods returning the Gateway envelope
 // { ok, value } wrapping the business { ok, ... } payload.
 // ---------------------------------------------------------------------------
+const uiPrefsState = { showRouteBadge: true }
 const businessFor = (method, payload) => {
   if (method === 'listProviders') return { ok: true, providers: testProviders, protocols: ['openai-completions', 'openai-responses', 'anthropic-messages'], writable: true }
   if (method === 'listRoutes') return { ok: true, routes: { auto: { strategy: 'priority', targets: [{ provider: 'deepseek', model: 'deepseek-chat' }] } } }
@@ -146,7 +147,9 @@ const businessFor = (method, payload) => {
     byTarget: { 'deepseek\u0000deepseek-chat': { calls: 12, errors: 1, latencySum: 4800, latencyN: 12, tokensIn: 100, tokensOut: 200 } },
     health: { 'deepseek\u0000deepseek-chat': { provider: 'deepseek', model: 'deepseek-chat', status: 'up', latencyMs: 400, consecutiveFails: 0, lastProbeAt: 1700000000000 } },
   }
-  if (method === 'listRequestLogs') return { ok: true, entries: [{ ts: 1700000000000, route: 'auto', target: { provider: 'deepseek', model: 'deepseek-chat' }, status: 'ok', tryIndex: 1, latencyMs: 400, tokens: { in: 100, out: 200 } }] }
+  if (method === 'getUiPrefs') return { ok: true, prefs: { ...uiPrefsState } }
+  if (method === 'setUiPrefs') { Object.assign(uiPrefsState, (payload && payload.prefs) || {}); return { ok: true, prefs: { ...uiPrefsState } } }
+  if (method === 'listRequestLogs') return { ok: true, entries: [{ ts: 1700000000000, sessionId: 'sess-x', route: 'auto', target: { provider: 'deepseek', model: 'deepseek-chat' }, status: 'ok', tryIndex: 1, latencyMs: 400, tokens: { in: 100, out: 200 } }] }
   return { ok: true }
 }
 
@@ -156,7 +159,7 @@ const remoteMethods = [
   'deleteProvider', 'updateField', 'updateHeaders', 'applyModels', 'testProvider',
   'setApiKey', 'listRoutes', 'setRoute', 'deleteRoute', 'listComposites', 'setComposite',
   'deleteComposite', 'previewComposite', 'getRouteStats', 'listRequestLogs',
-  'clearRequestLogs', 'probeTarget', 'probeAll',
+  'clearRequestLogs', 'probeTarget', 'probeAll', 'getUiPrefs', 'setUiPrefs',
 ]
 const remoteHandle = {}
 for (const m of remoteMethods) {
@@ -165,18 +168,20 @@ for (const m of remoteMethods) {
 
 const structures = []
 const fake = new FakeReact()
-let slotRender = null
-let slotLabel = null
+const slotsByName = new Map()
 
 const ctx = {
   get: (name) => {
     if (name === 'locale') return {
       register: () => {},
-      bind: () => (k) => k,
+      // Dictionary lookup for one badge key proves the bound t reaches the
+      // badge; everything else stays identity (existing assertions match keys).
+      bind: () => (k) => (k === 'badgeRoutePrefix' ? '路由' : k),
     }
     if (name === 'slots') return {
-      inject: (name, fn) => fn(),
-      register: (meta, render) => { slotLabel = meta; slotRender = render; return { id: meta.id } },
+      inject: (slotName, fn) => fn(),
+      // Multiple slots coexist (settings page + conversation turnTail badge).
+      register: (meta, render) => { slotsByName.set(meta.name, { label: meta, render }); return { id: meta.id } },
     }
     return undefined
   },
@@ -223,8 +228,11 @@ const moduleExports = captured.factory(requireShim)
 const plugin = moduleExports.apply ? moduleExports : moduleExports.default
 plugin.apply(ctx)
 
-assert(typeof slotRender === 'function', 'settings.section slot rendered')
-assert(typeof slotLabel?.label === 'function', 'slot label registered')
+const settingsSlot = slotsByName.get('settings.section')
+const badgeSlot = slotsByName.get('conversation.chat.turnTail')
+assert(settingsSlot && typeof settingsSlot.render === 'function', 'settings.section slot rendered')
+assert(settingsSlot.label && typeof settingsSlot.label.label === 'function', 'slot label registered')
+assert(badgeSlot && typeof badgeSlot.render === 'function' && typeof badgeSlot.label.select === 'function', 'turnTail badge slot registered with a select')
 
 // let the async remote $mount effect resolve so `remote` is wired before the
 // dashboard's first refresh() fires (the client mounts the remote in an async
@@ -235,7 +243,7 @@ await new Promise((r) => setTimeout(r, 10))
 // call resolves on a macrotask, not just the microtask queue)
 const out = []
 fake.rerender = () => {}
-let tree = slotRender()
+let tree = settingsSlot.render()
 renderAt(tree, fake, 'root', out)
 await new Promise((r) => setTimeout(r, 10))
 renderAt(tree, fake, 'root', out)
@@ -339,6 +347,38 @@ await new Promise((r) => setTimeout(r, 10))
 renderAt(tree, fake, 'root', outA)
 assert(outA.some((n) => String(n.className).includes('mpro-addBar')), 'add-model form panel renders')
 assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || '')), 'add-model submit button renders')
+
+// -- conversation badge (turnTail): select + render pipeline --
+{
+  const sel = badgeSlot.label.select({ turn: { start: { time: 1700000000000 - 5000 }, end: { time: 1700000000000 } }, seq: 42 })
+  assert(sel && typeof sel.from === 'number' && typeof sel.to === 'number' && sel.from < 1700000000000 && sel.to >= 1700000000000, 'badge select derives the turn window: ' + JSON.stringify(sel))
+  assert(badgeSlot.label.select({}) === null, 'badge select declines turns without boundaries')
+  assert(badgeSlot.label.select(null) === null, 'badge select declines a missing owner')
+
+  // positive render: the mocked log entry (sessionId sess-x) sits inside sel.
+  const badgeOut = []
+  fake.rerender = () => {}
+  let btree = badgeSlot.render({ matched: sel, sessionId: 'sess-x' })
+  renderAt(btree, fake, 'badge', badgeOut)
+  await new Promise((r) => setTimeout(r, 10))
+  btree = badgeSlot.render({ matched: sel, sessionId: 'sess-x' })
+  renderAt(btree, fake, 'badge', badgeOut)
+  await new Promise((r) => setTimeout(r, 10))
+  assert(badgeOut.some((n) => String(n.className).includes('mpro-badgeRow')), 'badge row renders for a routed turn')
+  assert(badgeOut.some((n) => (n.text || '') === '路由'), 'badge renders the TRANSLATED label, not the raw dictionary key')
+  assert(badgeOut.some((n) => String(n.className).includes('mpro-badgeChip') && /deepseek-chat/.test(n.text || '')), 'badge names the serving target: ' + JSON.stringify(badgeOut.filter((n) => String(n.className).includes('mpro-badge')).map((n) => n.text)))
+
+  // a turn outside the window renders nothing
+  const far = { from: sel.to + 60_000, to: sel.to + 120_000 }
+  const badgeOut2 = []
+  let btree2 = badgeSlot.render({ matched: far, sessionId: 'sess-x' })
+  renderAt(btree2, fake, 'badgeFar', badgeOut2)
+  await new Promise((r) => setTimeout(r, 10))
+  btree2 = badgeSlot.render({ matched: far, sessionId: 'sess-x' })
+  renderAt(btree2, fake, 'badgeFar', badgeOut2)
+  await new Promise((r) => setTimeout(r, 10))
+  assert(!badgeOut2.some((n) => String(n.className).includes('mpro-badgeRow')), 'badge stays hidden for turns the router did not serve')
+}
 
 console.log('PASS: client structural smoke — slot registered and redesigned dashboard rendered')
 console.log('  nodes:', out.length, '| classes seen:', [...allClassNames].filter((c) => c.includes('mpro-')).slice(0, 8).join(', '))

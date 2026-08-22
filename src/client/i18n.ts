@@ -271,6 +271,16 @@ export const ZH = {
   probeLoadErr: '探活数据加载失败：',
   probeExecErr: '探测执行失败：',
   probeErrDetail: '错误详情',
+
+  // Conversation badge (turnTail)
+  badgeRoutePrefix: '路由',
+  badgeFallback: '已无感切换',
+  badgeFallbackTitle: '该目标不是首选：前面的目标不可达时路由自动切换到了它',
+  uiShowBadge: '对话下方显示实际提供商',
+  uiShowBadgeHint:
+    '开启后，每个回合完成时会在其下方显示智能路由 / 组合提供商实际选中并服务该回合的目标（provider/model），发生自动切换时会标注「已无感切换」。',
+  uiPrefsSaved: '显示偏好已保存。',
+  uiPrefsErr: '保存显示偏好失败：',
   tabProviders: '提供商',
   tabRoutes: '智能路由',
 
@@ -566,6 +576,16 @@ export const EN = {
   probeLoadErr: 'Failed to load probe data: ',
   probeExecErr: 'Probe failed: ',
   probeErrDetail: 'Error detail',
+
+  // Conversation badge (turnTail)
+  badgeRoutePrefix: 'Route',
+  badgeFallback: 'seamless failover',
+  badgeFallbackTitle: 'This target was not first: routing switched here automatically after an earlier target failed',
+  uiShowBadge: 'Show serving provider under turns',
+  uiShowBadgeHint:
+    'When on, each completed turn shows which provider/model the smart route or composite actually served it with; automatic failovers are marked "seamless failover".',
+  uiPrefsSaved: 'Display preference saved.',
+  uiPrefsErr: 'Failed to save display preference: ',
   tabProviders: 'Providers',
   tabRoutes: 'Smart routing',
 

@@ -49,6 +49,41 @@ function firstErrorFrom(chunk: Record<string, any>): string | undefined {
   return undefined
 }
 
+/** Chunks that prove a target is actually producing output. Real pi-ai
+ * adapters NEVER throw for an unreachable provider — they yield a harmless
+ * `usage` chunk followed by a terminal error finish. So the only trustworthy
+ * "this target works" signal is visible progress: a content delta. */
+const PROGRESS_CHUNK_TYPES = new Set(['text-delta', 'reasoning-delta', 'tool-call-delta'])
+
+function isProgressChunk(chunk: unknown): boolean {
+  return !!chunk && typeof chunk === 'object' && PROGRESS_CHUNK_TYPES.has((chunk as Record<string, any>).type)
+}
+
+function isFinishChunk(chunk: unknown): boolean {
+  return !!chunk && typeof chunk === 'object' && (chunk as Record<string, any>).type === 'finish'
+}
+
+/** Pull one chunk, racing an optional per-attempt deadline (ms since epoch).
+ * The losing timer is defused so no unhandled rejection leaks; the underlying
+ * iterator stays alive and is closed by the caller via tryReturn(). */
+async function nextWithDeadline(
+  iterator: AsyncIterator<unknown>,
+  deadlineMs: number,
+): Promise<IteratorResult<unknown>> {
+  if (!Number.isFinite(deadlineMs)) return iterator.next()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    const wait = Math.max(0, deadlineMs - Date.now())
+    timer = setTimeout(() => reject(new Error('__mpro_attempt_timeout__')), wait)
+  })
+  timeout.catch(() => { /* defuse when the race is won by next() */ })
+  try {
+    return await Promise.race([iterator.next(), timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 function buildCallConfig(target: RouteTarget, wire: string, options: Record<string, any>): Record<string, unknown> {
   const c: Record<string, unknown> = { provider: target.provider, model: wire }
   if (options.reasoningEffort !== undefined) c.reasoningEffort = options.reasoningEffort
@@ -292,6 +327,10 @@ export function makeRouterAdapter(ctx: HostCtx): unknown {
       let lastErr = ''
       let tryIndex = 0
       let committed = false
+      // Per-attempt time-to-first-progress budget (RouteConfig.timeoutMs).
+      // 0/undefined = wait indefinitely (pi-ai's own idle watchdog still bounds hangs).
+      const attemptTimeoutMs =
+        typeof spec.config?.timeoutMs === 'number' && spec.config.timeoutMs > 0 ? spec.config.timeoutMs : 0
 
       for (const target of attemptList) {
         tryIndex += 1
@@ -310,38 +349,116 @@ export function makeRouterAdapter(ctx: HostCtx): unknown {
             : callConfig
           const iterator = prepared.stream(buildTargetOptions(resolvedConfig, options))[Symbol.asyncIterator]()
 
-          // Pull the first chunk to establish the connection; if the target is
-          // dead (throw, or an error finish), fall through to the next one.
-          let first
-          try {
-            first = await iterator.next()
-          } catch {
-            await tryReturn(iterator)
-            health().markDown(target.provider, target.model, '连接失败')
-            lastErr = `目标 ${target.provider}/${wire} 连接失败`
-            continue
-          }
-          if (first.done) {
-            await tryReturn(iterator)
-            health().markUp(target.provider, target.model)
-            committed = true
-            break
-          }
-          const firstErr = firstErrorFrom(first.value)
-          if (firstErr) {
-            await tryReturn(iterator)
-            health().markDown(target.provider, target.model, firstErr)
-            lastErr = `目标 ${target.provider}/${wire}: ${firstErr}`
-            continue
+          // ---- Pre-commit probe: buffer chunks until the target PROVES it can
+          // serve this request (a content delta), or fails cleanly. A dead
+          // provider surfaces here as [usage] then finish(error) — or a throw —
+          // never touching the consumer, so switching is seamless.
+          const buffered: Array<Record<string, any>> = []
+          let progressChunk: Record<string, any> | undefined
+          let terminal: Record<string, any> | undefined
+          let endedEmpty = false
+          const deadline = attemptTimeoutMs > 0 ? attemptStart + attemptTimeoutMs : Infinity
+
+          while (progressChunk === undefined && terminal === undefined) {
+            let item
+            try {
+              item = await nextWithDeadline(iterator, deadline)
+            } catch (error) {
+              // Caller cancellation must never be retried against another
+              // target — surface the abort and stop.
+              if (options.signal?.aborted) {
+                void tryReturn(iterator)
+                yield { type: 'finish', reason: { kind: 'aborted', failure: { message: '请求已被调用方中止', code: 'ABORTED' } } }
+                return
+              }
+              // Fire-and-forget close: the underlying generator may still have
+              // an in-flight next() parked on a hung socket — awaiting its
+              // return() would stall this attempt past the deadline itself.
+              void tryReturn(iterator)
+              const timedOut = String((error as Error)?.message || error) === '__mpro_attempt_timeout__'
+              const why = timedOut ? `连接超时（${attemptTimeoutMs}ms 内无响应）` : '连接失败'
+              health().markDown(target.provider, target.model, why)
+              stats().record({
+                route: routeName, provider: target.provider, model: wire, ok: false,
+                latencyMs: Date.now() - attemptStart, tryIndex, sessionId: sid,
+                error: `目标 ${target.provider}/${wire} ${why}`,
+              })
+              lastErr = `目标 ${target.provider}/${wire}: ${why}`
+              break
+            }
+            if (item.done) { endedEmpty = true; break }
+            const chunk = item.value as Record<string, any>
+            if (isFinishChunk(chunk)) { terminal = chunk; break }
+            buffered.push(chunk)
+            if (isProgressChunk(chunk)) { progressChunk = chunk; break }
           }
 
-          // Committed to this target — replay the first chunk, then drain.
+          // Pre-commit failure → try the next target.
+          if (progressChunk === undefined && (terminal === undefined || firstErrorFrom(terminal) !== undefined)) {
+            if (terminal === undefined) {
+              // Throw / timeout / empty-stream path (loop exited without progress).
+              if (!endedEmpty) continue // already handled (throw/timeout recorded)
+              health().markDown(target.provider, target.model, '空响应')
+              stats().record({
+                route: routeName, provider: target.provider, model: wire, ok: false,
+                latencyMs: Date.now() - attemptStart, tryIndex, sessionId: sid,
+                error: `目标 ${target.provider}/${wire} 空响应`,
+              })
+              lastErr = `目标 ${target.provider}/${wire}: 空响应`
+              continue
+            }
+            // A terminal finish arrived with zero visible output.
+            const errText = firstErrorFrom(terminal)
+            if (typeof errText === 'string') {
+              // Real failure from the provider — switch to the next target.
+              // (Caller aborts surface as kind 'aborted', which firstErrorFrom
+              // does not match — they fall through to the commit path below and
+              // propagate verbatim, so a cancel is never retried elsewhere.)
+              await tryReturn(iterator)
+              health().markDown(target.provider, target.model, errText)
+              stats().record({
+                route: routeName, provider: target.provider, model: wire, ok: false,
+                latencyMs: Date.now() - attemptStart, tryIndex, sessionId: sid,
+                error: `目标 ${target.provider}/${wire}: ${errText}`,
+              })
+              lastErr = `目标 ${target.provider}/${wire}: ${errText}`
+              continue
+            }
+            // A clean stop/max-tokens/tool-calls finish with no content at all:
+            // pass it through rather than spinning every target on an empty answer.
+          }
+
+          // ---- Committed to this target — replay buffered chunks, then drain.
           health().markUp(target.provider, target.model, Date.now() - attemptStart)
           committed = true
           if (pinKey) pin[pinKey] = target
 
           let tokens: { in?: number; out?: number } = {}
-          yield first.value
+          for (const c of buffered) {
+            const tk = tokensFrom(c)
+            if (tk.in !== undefined) tokens.in = tk.in
+            if (tk.out !== undefined) tokens.out = tk.out
+            yield c
+          }
+          if (terminal !== undefined) {
+            // Committed-but-terminal (empty success or caller abort): forward
+            // the terminal chunk, record, stop — no further targets.
+            stats().record({
+              route: routeName, provider: target.provider, model: wire, ok: true,
+              latencyMs: Date.now() - t0, tokensIn: tokens.in, tokensOut: tokens.out,
+              tryIndex, sessionId: sid, status: tryIndex > 1 ? 'fallback' : 'ok',
+            })
+            yield terminal
+            return
+          }
+          // Drain the committed stream. A provider can still die MID-STREAM
+          // (e.g. a gateway that accepts the connection then answers 500):
+          // pi-ai delivers that as a terminal error finish, which passes
+          // through to the consumer (content already shown — switching now
+          // would duplicate/mix output), but the bookkeeping must tell the
+          // truth: the log entry is an ERROR, and the target is marked down
+          // so the agent-loop's model retry prefers another target.
+          let terminalReason: Record<string, any> | undefined
           while (true) {
             let item
             try {
@@ -356,19 +473,40 @@ export function makeRouterAdapter(ctx: HostCtx): unknown {
               throw new Error(`目标 ${target.provider}/${wire} 传输中断: ${String((error as Error)?.message || error)}`)
             }
             if (item.done) {
-              stats().record({
-                route: routeName, provider: target.provider, model: wire, ok: true,
-                latencyMs: Date.now() - t0, tokensIn: tokens.in, tokensOut: tokens.out,
-                tryIndex, sessionId: sid,
-              })
+              const reason = terminalReason && typeof terminalReason === 'object' ? terminalReason : undefined
+              const errText = reason && reason.kind === 'error'
+                ? String((reason.failure && reason.failure.message) || (reason as any).message || '未知错误')
+                : undefined
+              const aborted = !!reason && reason.kind === 'aborted'
+              if (errText !== undefined) {
+                health().markDown(target.provider, target.model, errText)
+                stats().record({
+                  route: routeName, provider: target.provider, model: wire, ok: false,
+                  latencyMs: Date.now() - t0, tokensIn: tokens.in, tokensOut: tokens.out,
+                  tryIndex, sessionId: sid,
+                  error: `目标 ${target.provider}/${wire} 中途返回错误: ${errText}`,
+                })
+              } else {
+                stats().record({
+                  route: routeName, provider: target.provider, model: wire, ok: aborted ? false : true,
+                  latencyMs: Date.now() - t0, tokensIn: tokens.in, tokensOut: tokens.out,
+                  tryIndex, sessionId: sid, status: tryIndex > 1 ? 'fallback' : 'ok',
+                  ...(aborted ? { error: '已中止' } : {}),
+                })
+              }
               return
             }
-            const tk = tokensFrom(item.value)
+            const chunk = item.value as Record<string, any>
+            if (isFinishChunk(chunk)) terminalReason = (chunk as any).reason
+            const tk = tokensFrom(chunk)
             if (tk.in !== undefined) tokens.in = tk.in
             if (tk.out !== undefined) tokens.out = tk.out
-            yield item.value
+            yield chunk
           }
         } catch (error) {
+          // prepareCall / dispatch failure for this target — but a caller abort
+          // ends the whole route instead of moving on.
+          if (options.signal?.aborted) return
           stats().record({
             route: routeName, provider: target.provider, model: wire, ok: false,
             latencyMs: Date.now() - t0, tryIndex, sessionId: sid,

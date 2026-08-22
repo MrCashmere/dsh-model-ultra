@@ -42,12 +42,16 @@ export async function getRouteStats(ctx: HostCtx) {
   })
 }
 
-export async function listRequestLogs(ctx: HostCtx, args?: { limit?: number; route?: string; status?: string }) {
+export async function listRequestLogs(ctx: HostCtx, args?: { limit?: number; route?: string; status?: string; sessionId?: string }) {
   const route = typeof args?.route === 'string' ? args.route.trim() : ''
   const status = typeof args?.status === 'string' ? args.status.trim() : ''
+  const sessionId = typeof args?.sessionId === 'string' ? args.sessionId.trim() : ''
   let entries = getLogRing().entries()
   if (route) entries = entries.filter((e) => e.route === route || e.target.provider === route)
   if (status) entries = entries.filter((e) => e.status === status)
+  // Exact session match when provided (the conversation badge uses this to
+  // correlate a turn's calls with the targets that actually served them).
+  if (sessionId) entries = entries.filter((e) => e.sessionId === sessionId)
   const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 500) : 200
   return jsonSafe({ ok: true as const, entries: entries.slice(-limit) })
 }

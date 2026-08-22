@@ -66,3 +66,8 @@ export const COMPOSITES_KEY = 'composites'
  * without a separate store. High-frequency logs go to the in-memory ring
  * instead (the Host sandbox withholds node fs), bounded per session. */
 export const ROUTE_STATS_KEY = 'routeStats'
+
+/** Foreign key (inside the llm-pi-ai settings section) holding this plugin's
+ * UI preferences — e.g. whether the conversation badge that shows which
+ * provider actually served each turn is displayed. */
+export const UI_PREFS_KEY = 'uiPrefs'

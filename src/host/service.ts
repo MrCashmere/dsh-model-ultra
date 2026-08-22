@@ -32,6 +32,7 @@ import {
   probeTarget,
   probeAll,
 } from './handlers/observability'
+import { getUiPrefs, setUiPrefs } from './handlers/uiPrefs'
 
 export class ModelProRuntime extends (TypertRemoteService as any) {
   ctx: HostCtx
@@ -109,5 +110,11 @@ export class ModelProRuntime extends (TypertRemoteService as any) {
   }
   async probeAll() {
     return probeAll(this.ctx)
+  }
+  async getUiPrefs() {
+    return getUiPrefs(this.ctx)
+  }
+  async setUiPrefs(args: any) {
+    return setUiPrefs(this.ctx, args || {})
   }
 }

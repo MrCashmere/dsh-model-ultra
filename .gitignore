@@ -13,3 +13,6 @@ node_modules/
 # pnpm is only a local fallback; npm + package-lock.json are canonical here
 pnpm-lock.yaml
 .pnpm-store/
+
+# Local draft: linux.do forum post (not part of the project)
+/docs/linuxdo-post.md

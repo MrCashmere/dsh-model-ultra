@@ -48,9 +48,13 @@ function createLlm(log = []) {
   ]
   const registrations = []
   const failProviders = new Set()
+  // Per-provider scripted streams — mimic the REAL pi-ai adapter, which never
+  // throws for an unreachable provider: it yields [usage] then finish(error).
+  const scriptedStreams = new Map()
   return {
     registrations,
     failProviders,
+    scriptedStreams,
     listConfigurableProviders: () => catalog,
     discoverModels: async (ns, request) => {
       if (request.api === 'anthropic-messages') return []
@@ -76,17 +80,20 @@ function createLlm(log = []) {
     prepareCall: async (config, signal) => {
       if (failProviders.has(config.provider)) throw new Error(`mock provider ${config.provider} is down`)
       log.lastConfig = config
+      const scripted = scriptedStreams.get(config.provider)
       // Mirror the real llm runtime: prepareCall exposes the RESOLVED config,
       // and stream() must be dispatched with a config that matches it on the
       // compared fields — the handler now echoes prepared.config back.
       return {
         config: { ...config },
-        stream: async function* (opts) {
-          log.lastStreamOpts = opts
-          yield { type: 'block-start', index: 0, blockType: 'text' }
-          yield { type: 'text-delta', index: 0, text: 'pong' }
-          yield { type: 'finish', reason: 'stop' }
-        },
+        stream: scripted
+          ? (opts) => scripted(opts)
+          : async function* (opts) {
+              log.lastStreamOpts = opts
+              yield { type: 'block-start', index: 0, blockType: 'text' }
+              yield { type: 'text-delta', index: 0, text: 'pong' }
+              yield { type: 'finish', reason: 'stop' }
+            },
       }
     },
   }
@@ -405,6 +412,159 @@ assert(log.lastConfig && log.lastConfig.provider === 'opencode-go' && log.lastCo
 assert(sawPong2, 'fallback target streams through')
 llm.failProviders.delete('brokengw')
 
+// --- REAL pi-ai failure shape: unreachable providers NEVER throw; they emit
+// [usage] then finish(error). The old router committed on the first chunk
+// (the harmless usage) and passed the error straight through — no failover.
+// The pre-commit buffer must treat this exactly like a dead target. ---
+llm.scriptedStreams.set('piashape', async function* () {
+  yield { type: 'usage', usage: { input_tokens: 1, output_tokens: 0 } }
+  yield { type: 'finish', reason: { kind: 'error', failure: { message: 'connect ECONNREFUSED 127.0.0.1:9', code: 'TRANSPORT' } } }
+})
+await P('create-provider', { route: 'piashape', baseURL: 'https://pia/v1' }).catch(() => {})
+await P('set-route', {
+  alias: 'auto-piashape', strategy: 'priority',
+  targets: [
+    { provider: 'piashape', model: 'x' },
+    { provider: 'opencode-go', model: 'deepseek-v4-flash' },
+  ],
+})
+{
+  let sawPong3 = false
+  let sawLeak = false
+  for await (const c of rreg.adapter.stream({
+    provider: 'router', model: 'auto-piashape',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    temperature: 0, maxTokens: 16, sessionId: 'sess-piashape',
+  })) {
+    if (c && c.type === 'text-delta' && c.text === 'pong') sawPong3 = true
+    if (c && c.type === 'finish' && c.reason && typeof c.reason === 'object' && c.reason.kind === 'error') sawLeak = true
+  }
+  assert(sawPong3, 'pi-ai-shaped failure falls over to the healthy target')
+  assert(!sawLeak, 'error finish from a dead first target never reaches the consumer')
+}
+// the committed (second-attempt) call is logged with fallback status
+{
+  const lr = await P('list-request-logs', { sessionId: 'sess-piashape' })
+  const okEntries = (lr.entries || []).filter((e) => e.status !== 'error')
+  assert(okEntries.some((e) => e.status === 'fallback' && e.target.provider === 'opencode-go'), 'fallback outcome recorded in request log: ' + JSON.stringify(okEntries))
+}
+
+// --- timeoutMs: a hung first target must not stall the route; the deadline
+// abandons it and the second target answers. ---
+llm.scriptedStreams.set('hangup', async function* () {
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  yield { type: 'block-start', index: 0, blockType: 'text' }
+})
+await P('create-provider', { route: 'hangup', baseURL: 'https://hang/v1' }).catch(() => {})
+await P('set-route', {
+  alias: 'auto-timeout', strategy: 'priority', config: { timeoutMs: 60 },
+  targets: [
+    { provider: 'hangup', model: 'x' },
+    { provider: 'opencode-go', model: 'deepseek-v4-flash' },
+  ],
+})
+{
+  const t0 = Date.now()
+  let sawPong4 = false
+  for await (const c of rreg.adapter.stream({
+    provider: 'router', model: 'auto-timeout',
+    messages: [], temperature: 0, maxTokens: 16,
+  })) {
+    if (c && c.type === 'text-delta' && c.text === 'pong') sawPong4 = true
+  }
+  const took = Date.now() - t0
+  assert(sawPong4, 'timeout on a hung target still serves via fallback target')
+  assert(took < 400, `timeout budget respected (${took}ms << 500ms hang)`)
+}
+
+// --- caller abort mid-negotiation is honored: aborted finish passes through,
+// and routing does NOT retry the next target after a caller abort. ---
+llm.scriptedStreams.set('abortgw', async function* () {
+  yield { type: 'usage', usage: { input_tokens: 1, output_tokens: 0 } }
+  yield { type: 'finish', reason: { kind: 'aborted', failure: { message: 'aborted by caller', code: 'ABORTED' } } }
+})
+await P('create-provider', { route: 'abortgw', baseURL: 'https://abort/v1' }).catch(() => {})
+await P('set-route', {
+  alias: 'auto-abort', strategy: 'priority',
+  targets: [
+    { provider: 'abortgw', model: 'x' },
+    { provider: 'opencode-go', model: 'deepseek-v4-flash' },
+  ],
+})
+{
+  let sawAborted = false
+  let hitSecondTarget = false
+  for await (const c of rreg.adapter.stream({
+    provider: 'router', model: 'auto-abort',
+    messages: [], temperature: 0, maxTokens: 16,
+  })) {
+    if (c && c.type === 'finish' && c.reason && typeof c.reason === 'object' && c.reason.kind === 'aborted') sawAborted = true
+  }
+  hitSecondTarget = log.lastConfig && log.lastConfig.provider === 'opencode-go'
+  assert(sawAborted, 'caller abort surfaces as an aborted finish')
+  assert(!hitSecondTarget, 'no cross-target retry after an abort')
+}
+
+// --- empty-success passthrough: finish(stop) with zero content commits and
+// passes through rather than spinning every target. ---
+llm.scriptedStreams.set('emptygw', async function* () {
+  yield { type: 'usage', usage: { input_tokens: 2, output_tokens: 0 } }
+  yield { type: 'finish', reason: { kind: 'stop' } }
+})
+await P('create-provider', { route: 'emptygw', baseURL: 'https://empty/v1' }).catch(() => {})
+await P('set-route', {
+  alias: 'auto-empty', strategy: 'priority',
+  targets: [
+    { provider: 'emptygw', model: 'x' },
+    { provider: 'opencode-go', model: 'deepseek-v4-flash' },
+  ],
+})
+{
+  let sawStop = false
+  for await (const c of rreg.adapter.stream({
+    provider: 'router', model: 'auto-empty',
+    messages: [], temperature: 0, maxTokens: 16,
+  })) {
+    if (c && c.type === 'finish') sawStop = true
+  }
+  const servedByEmpty = log.lastConfig && log.lastConfig.provider === 'emptygw'
+  assert(sawStop, 'clean empty stop passes through to the consumer')
+  assert(servedByEmpty, 'empty success commits to its target instead of failing over')
+}
+
+// --- MID-STREAM provider death (the new-api 500 shape): the gateway accepts,
+// streams a delta, THEN answers "负载已达上限". Content already reached the
+// consumer so transparent switching is impossible — but the bookkeeping must
+// tell the truth: log entry is an ERROR carrying the message, and the target
+// records the failure so the model-level retry can avoid it. ---
+llm.scriptedStreams.set('middeath', async function* () {
+  yield { type: 'block-start', index: 0, blockType: 'text' }
+  yield { type: 'text-delta', index: 0, text: 'partial ' }
+  yield { type: 'usage', usage: { input_tokens: 3, output_tokens: 1 } }
+  yield { type: 'finish', reason: { kind: 'error', failure: { message: 'OpenAI API error (500): 当前模型 gpt-5.6-sol 负载已经达到上限', code: 'SERVER' } } }
+})
+await P('create-provider', { route: 'middeath', baseURL: 'https://mid/v1' }).catch(() => {})
+await P('set-route', {
+  alias: 'auto-middeath', strategy: 'priority',
+  targets: [{ provider: 'middeath', model: 'x' }],
+})
+{
+  let lastChunk = null
+  for await (const c of rreg.adapter.stream({
+    provider: 'router', model: 'auto-middeath',
+    messages: [], temperature: 0, maxTokens: 16, sessionId: 'sess-mid',
+  })) {
+    lastChunk = c
+  }
+  assert(lastChunk && lastChunk.type === 'finish' && lastChunk.reason && lastChunk.reason.kind === 'error', 'mid-stream error finish reaches the consumer for agent-level handling')
+  const lr = await P('list-request-logs', { sessionId: 'sess-mid' })
+  const entry = (lr.entries || []).find((e) => e.target && e.target.provider === 'middeath')
+  assert(entry && entry.status === 'error' && /负载已经达到上限/.test(String(entry.error || '')), `mid-stream failure logged as ERROR with the message: ${JSON.stringify(entry)}`)
+  const gs = await P('get-route-stats')
+  const h = (gs.health || {})['middeath\u0000x']
+  assert(h && typeof h.lastError === 'string' && /负载/.test(h.lastError), 'mid-stream failure updates target health: ' + JSON.stringify(h))
+}
+
 // --- all targets dead -> clean route-level error (no infinite hang) ---
 llm.failProviders.add('brokengw')
 await P('set-route', { alias: 'dead', strategy: 'priority', targets: [{ provider: 'brokengw', model: 'x' }] })
@@ -568,6 +728,19 @@ const compLog = r.entries.find((e) => e.route === 'mixture::gpt-4o')
 assert(compLog && compLog.status === 'ok' && typeof compLog.latencyMs === 'number', 'composite log entry recorded: ' + JSON.stringify(compLog))
 r = await P('clear-request-logs')
 assert(r.ok && (await P('list-request-logs')).entries.length === 0, 'clear-request-logs empties ring')
+
+// --- ui prefs: badge toggle persists under llm-pi-ai[uiPrefs] and merges ---
+r = await P('get-ui-prefs')
+assert(r.ok && r.prefs && r.prefs.showRouteBadge === true, 'ui prefs default to showRouteBadge=true: ' + JSON.stringify(r))
+r = await P('set-ui-prefs', { prefs: { showRouteBadge: false } })
+assert(r.ok && r.prefs.showRouteBadge === false, 'set-ui-prefs flips the badge off')
+r = await P('get-ui-prefs')
+assert(r.prefs.showRouteBadge === false, 'get-ui-prefs reflects the saved value')
+assert(log.section().uiPrefs && typeof log.section().uiPrefs === 'object', 'uiPrefs persisted as a section foreign key: ' + JSON.stringify(Object.keys(log.section())))
+r = await P('list-routes')
+assert(r.ok && r.routes && Object.keys(r.routes).length >= 1, 'uiPrefs write preserved sibling keys (routes intact)')
+r = await P('set-ui-prefs', { prefs: { showRouteBadge: true } })
+assert(r.ok && r.prefs.showRouteBadge === true, 'set-ui-prefs restores the default')
 
 // probe-target marks up a healthy target
 r = await P('probe-target', { provider: 'comp-a', model: 'gpt-4o' })
