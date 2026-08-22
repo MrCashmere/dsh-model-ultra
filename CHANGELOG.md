@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.6 — 2026-08-22
+
+- feat(ui): add UI preferences for conversation badge visibility
+
 ## 1.1.5 — 2026-08-22
 
 - feat: add custom model management and search functionality in ModelsPanel
