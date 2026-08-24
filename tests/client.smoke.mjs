@@ -226,6 +226,7 @@ vm.runInContext(code, vm.createContext(sandbox), { filename: 'model-pro-client.j
 assert(captured && captured.id === 'dsh-model-pro', 'client bundle registered under its package id')
 const moduleExports = captured.factory(requireShim)
 const plugin = moduleExports.apply ? moduleExports : moduleExports.default
+const badgeMod = moduleExports
 plugin.apply(ctx)
 
 const settingsSlot = slotsByName.get('settings.section')
@@ -350,7 +351,7 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
 
 // -- conversation badge (turnTail): select + render pipeline --
 {
-  const sel = badgeSlot.label.select({ turn: { start: { time: 1700000000000 - 5000 }, end: { time: 1700000000000 } }, seq: 42 })
+  const sel = badgeSlot.label.select({ turn: { turn: 7, start: { time: 1700000000000 - 5000 }, end: { time: 1700000000000 } }, seq: 42 })
   assert(sel && typeof sel.from === 'number' && typeof sel.to === 'number' && sel.from < 1700000000000 && sel.to >= 1700000000000, 'badge select derives the turn window: ' + JSON.stringify(sel))
   assert(badgeSlot.label.select({}) === null, 'badge select declines turns without boundaries')
   assert(badgeSlot.label.select(null) === null, 'badge select declines a missing owner')
@@ -378,6 +379,79 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   renderAt(btree2, fake, 'badgeFar', badgeOut2)
   await new Promise((r) => setTimeout(r, 10))
   assert(!badgeOut2.some((n) => String(n.className).includes('mpro-badgeRow')), 'badge stays hidden for turns the router did not serve')
+
+  // -- precise per-turn attribution: the window must end at the NEXT turn's
+  // start, never overlap it. Overlapping ±slack windows were the cause of
+  // "有时候有有时候没有" (adjacent turns stealing/dropping each others' logs). --
+  assert(typeof sel.turn === 'number', 'badge select carries the turn number for precise correlation')
+
+  // turnTimings: turn 1 starts at T, turn 2 starts at T+30s.
+  const T = 1700000000000
+  const timings = new Map([
+    [1, { startTime: T, endTime: T + 20_000 }],
+    [2, { startTime: T + 30_000, endTime: T + 50_000 }],
+  ])
+  const snap = { chat: { turnTimings: timings } }
+  const useSession = (fn) => fn(snap)
+
+  const k1 = badgeMod.preciseWindowKey(snap, 1)
+  const [f1, t1] = k1.split('|').map(Number)
+  assert(t1 === T + 30_000, `turn 1 window ends exactly at turn 2 start, got ${t1 - T}ms offset`)
+  assert(f1 === T - 1_000, `turn 1 window starts at its own start (small lead-in), got ${f1 - T}`)
+
+  const k2 = badgeMod.preciseWindowKey(snap, 2)
+  const [f2, t2b] = k2.split('|').map(Number)
+  assert(f2 === T + 29_000, 'turn 2 window starts at its own start')
+  assert(t2b > T + 50_000, 'latest turn keeps an open-ended window so late logs still land')
+  assert(f2 >= t1 - 1_000, 'adjacent turn windows do not overlap materially')
+
+  // The REAL DSH source is snapshot.chat.timeline.turns (turn objects with
+  // start:{time}), not a turnTimings map — reading only the map was why the
+  // precise window silently fell back to the coarse ±slack window on the live
+  // build. This asserts the timeline.turns path works identically.
+  const turnsMap = new Map([
+    [1, { turn: 1, start: { time: T }, end: { time: T + 20_000 }, status: 'closed' }],
+    [2, { turn: 2, start: { time: T + 30_000 }, status: 'open' }],
+  ])
+  const snapTimeline = { chat: { timeline: { turns: turnsMap } } }
+  const kt1 = badgeMod.preciseWindowKey(snapTimeline, 1)
+  const [ft1, tt1] = kt1.split('|').map(Number)
+  assert(tt1 === T + 30_000 && ft1 === T - 1_000, 'timeline.turns path yields the same precise window as turnTimings: ' + kt1)
+  // legacy.turnTimings path too.
+  const snapLegacy = { chat: { legacy: { turnTimings: timings } } }
+  assert(badgeMod.preciseWindowKey(snapLegacy, 1) === k1, 'legacy.turnTimings path yields the same precise window')
+
+  assert(badgeMod.preciseWindowKey({}, 1) === '', 'precise window declines a snapshot without any timing source (falls back)')
+  assert(badgeMod.preciseWindowKey(snap, 99) === '', 'precise window declines an unknown turn')
+  assert(badgeMod.preciseWindowKey(null, 1) === '', 'precise window is throw-free on a missing snapshot')
+
+  // The component must PREFER the precise window over the coarse `matched`:
+  // the mocked log entry sits inside sel, but we pass a precise timeline that
+  // places this turn's window far away — the badge must then stay hidden.
+  const badgeOut3 = []
+  const farTimings = new Map([[sel.turn, { startTime: T + 600_000 }], [sel.turn + 1, { startTime: T + 700_000 }]])
+  const farUseSession = (fn) => fn({ chat: { turnTimings: farTimings } })
+  let btree3 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: farUseSession })
+  renderAt(btree3, fake, 'badgePrecise', badgeOut3)
+  await new Promise((r) => setTimeout(r, 10))
+  btree3 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: farUseSession })
+  renderAt(btree3, fake, 'badgePrecise', badgeOut3)
+  await new Promise((r) => setTimeout(r, 10))
+  assert(!badgeOut3.some((n) => String(n.className).includes('mpro-badgeRow')),
+    'precise timeline window overrides the coarse window (no cross-turn attribution)')
+
+  // ...and with a precise window that DOES contain the entry, it renders again.
+  const badgeOut4 = []
+  const nearTimings = new Map([[sel.turn, { startTime: sel.from + 4_000 }]])
+  const nearUseSession = (fn) => fn({ chat: { turnTimings: nearTimings } })
+  let btree4 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: nearUseSession })
+  renderAt(btree4, fake, 'badgeNear', badgeOut4)
+  await new Promise((r) => setTimeout(r, 10))
+  btree4 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: nearUseSession })
+  renderAt(btree4, fake, 'badgeNear', badgeOut4)
+  await new Promise((r) => setTimeout(r, 10))
+  assert(badgeOut4.some((n) => String(n.className).includes('mpro-badgeRow')),
+    'badge renders when the precise window contains the routed call')
 }
 
 console.log('PASS: client structural smoke — slot registered and redesigned dashboard rendered')

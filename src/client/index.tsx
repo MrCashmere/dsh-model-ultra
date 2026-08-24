@@ -90,3 +90,7 @@ export function apply(ctx: any) {
 
 // NOTE: no `default` export here — the loader's unwrapExports prefers a
 // default export and would swallow the `name`/`inject` named exports.
+
+/** Test-only re-export: the smoke harness asserts the per-turn correlation
+ * window directly (it is pure and the badge's correctness hinges on it). */
+export { preciseWindowKey } from './components/RouteBadge'

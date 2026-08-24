@@ -37,6 +37,32 @@ function createSettings(initialDocument) {
   }
 }
 
+/**
+ * A settings wrapper that models the REAL dsh-settings timing: the namespace's
+ * resolved value is `undefined` until the owning plugin (llm-pi-ai) registers
+ * its section, then becomes live. This is the reinstall race — model-pro may
+ * apply BEFORE pi-ai, read nothing, and (before the fix) silently skip the
+ * re-park of disabled-marked providers sitting in `providers`.
+ */
+function createLateSettings(store) {
+  let registered = false
+  const fire = (ns) => { for (const fn of listeners['settings/updated'] || []) try { fn(ns, 1) } catch { /* ignore */ } }
+  return {
+    get registered() { return registered },
+    register: () => {
+      registered = true
+      // Commit fires settings/updated for the namespace, like dsh-settings.
+      queueMicrotask(() => fire('llm-pi-ai'))
+    },
+    get: (ns) => {
+      if (ns === 'llm-pi-ai' && !registered) return undefined
+      return store.get(ns)
+    },
+    get writable() { return store.writable },
+    replace: (ns, section) => store.replace(ns, section),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // mock llm service — a catalog provider + an open gateway; prepareCall emits a
 // tiny stream like the real pi-ai adapter does.
@@ -359,6 +385,52 @@ await new Promise((res) => setTimeout(res, 5))
 assert(Object.hasOwn(dis(), 'flag-gw') && dis()['flag-gw'].disabled === true, 'reinstall re-parks the marked provider')
 r = await P('list-providers')
 assert(r.providers.find((x) => x.route === 'flag-gw').disabled === true, 'reinstall list still disabled')
+
+// --- reinstall with pi-ai loading AFTER model-pro: the section is not
+// resolvable at apply time, so the eager park reads nothing. The
+// `settings/updated` re-park must catch the markers the moment the namespace
+// commits — otherwise llm-pi-ai's resolveProfiles (which ignores the marker)
+// registers them as ACTIVE routes and disabled models resurface. ---
+{
+  const lateStore = createSettings({
+    providers: { lateGw: { baseURL: 'https://late/v1', disabled: true } },
+    disabledProviders: {},
+    noteK: 1,
+  })
+  const late = createLateSettings(lateStore)
+  listeners['settings/updated'] = []
+  const lateCtx = {
+    get: (name) => (name === 'settings' ? late : name === 'llm' ? llm : name === 'credentials' ? creds : undefined),
+    typert: { register: () => () => {} },
+    on: ctx.on,
+    effect: ctx.effect,
+  }
+  apply(lateCtx)
+  // Eager attempt ran against an unregistered section -> must NOT have parked yet.
+  const lateDoc = () => lateStore.doc()
+  assert(!Object.hasOwn(lateDoc().disabledProviders || {}, 'lateGw'), 'eager park no-ops while the section is unregistered')
+  assert(
+    Object.hasOwn(lateDoc().providers || {}, 'lateGw') && lateDoc().providers.lateGw.disabled === true,
+    'marked provider still sits in providers before pi-ai loads',
+  )
+
+  // Now pi-ai registers its namespace and commits -> settings/updated fires.
+  await Promise.resolve()
+  late.register()
+  await new Promise((res) => setTimeout(res, 5))
+
+  assert(
+    Object.hasOwn(lateDoc().disabledProviders || {}, 'lateGw') && lateDoc().disabledProviders.lateGw.disabled === true,
+    'settings/updated re-park parks the marked provider once the namespace commits',
+  )
+  assert(!Object.hasOwn(lateDoc().providers || {}, 'lateGw'), 'parked provider removed from providers after late registration')
+  assert(lateDoc().noteK === 1, 'foreign section keys survive the late re-park write')
+
+  // Restore shared harness state: drop the second runtime + the listeners it
+  // registered, so the following tests keep driving the ORIGINAL instance.
+  runtimes.pop()
+  listeners['settings/updated'] = []
+}
 
 // enable: clears the marker and returns it to providers
 r = await P('toggle-provider', { route: 'flag-gw', enabled: true })
@@ -818,5 +890,28 @@ await P('delete-composite', { name: 'mixture' })
 await P('delete-composite', { name: 'common' })
 await P('delete-provider', { route: 'comp-a' })
 await P('delete-provider', { route: 'comp-b' })
+
+// --- FINAL: uninstall while the settings/updated re-park listener is live ---
+// Restore moves parked providers BACK into providers and its write emits
+// settings/updated — the unloading flag must keep the listener from
+// immediately re-parking them (which would silently break the uninstall
+// "no data lost" guarantee). Runs last because it tears down every effect,
+// exactly like a real cordis fiber unload.
+{
+  // Park one provider so restore has real data to move back.
+  await P('create-provider', { route: 'unl-gw', baseURL: 'https://unl/v1' })
+  r = await P('toggle-provider', { route: 'unl-gw', enabled: false })
+  assert(r.ok && Object.hasOwn(dis(), 'unl-gw'), 'pre-condition: unl-gw parked')
+  // Simulate the real unload: run every cleanup in LIFO order like cordis.
+  const lifo = cleanups.splice(0, cleanups.length)
+  for (let i = lifo.length - 1; i >= 0; i--) await Promise.resolve(lifo[i]())
+  assert(provs()['unl-gw'] && provs()['unl-gw'].disabled === true, 'unload restored unl-gw to providers (marker intact)')
+  // Fire the event after the disposers ran — the way dsh-settings' queued
+  // write would commit. The listener is disposed AND the unloading flag set,
+  // so nothing may re-park behind the safety net's back.
+  for (const fn of listeners['settings/updated'] || []) try { fn('llm-pi-ai', 9) } catch { /* ignore */ }
+  await new Promise((res) => setTimeout(res, 5))
+  assert(provs()['unl-gw'] && !Object.hasOwn(dis(), 'unl-gw'), 'uninstall-restore is NOT undone by a late settings/updated re-park')
+}
 
 console.log('PASS: host end-to-end smoke — all assertions green')

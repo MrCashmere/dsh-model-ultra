@@ -27,8 +27,16 @@ import { resetObservabilitySingletons, hydrateObservability, persistStats } from
 /** Loader entry id / client bundle id. */
 export const name = PACKAGE
 
-/** Hard dependency: the Typert registry must exist before we register. */
-export const inject = ['typert']
+/** Hard dependencies. `typert` is the RPC registry we register into. `settings`
+ * and `llm` gate WHEN apply runs: cordis parks the fiber until every declared
+ * service exists (dsh-cordis-host-runner: "a valid unresolved inject may remain
+ * pending"), so declaring them guarantees the reinstall re-park below reads a
+ * MOUNTED settings service. Without them an early apply would call
+ * `ctx.get('settings')` before it is mounted, read an empty section, and the
+ * re-park of marked providers would silently no-op — leaving disabled-marked
+ * providers sitting in `providers`, where llm-pi-ai's resolveProfiles registers
+ * them as fully active routes again (the marker means nothing to it). */
+export const inject = ['typert', 'settings', 'llm']
 
 export function apply(ctx: HostCtx) {
   const c = ctx as any
@@ -67,13 +75,50 @@ export function apply(ctx: HostCtx) {
 
   // Reinstall recovery: parked providers keep their `disabled` marker, so on
   // startup re-park them into disabledProviders (adapter keeps ignoring them).
-  parkDisabledProviders(ctx)?.catch?.(() => {})
+  //
+  // Two-phase, because load order is not guaranteed:
+  //  1. eager attempt — works when pi-ai already registered its section;
+  //  2. `settings/updated` re-park — dsh-settings emits this for the
+  //     `llm-pi-ai` namespace when it first commits (pi-ai registering its
+  //     section) and on every later write. If the eager attempt ran before
+  //     that section resolved (model-pro loaded before pi-ai), this catches
+  //     the marked providers as soon as they become readable and parks them.
+  //
+  // parkDisabledProviders is idempotent and writes only when a marked profile
+  // actually moved, so re-firing on our own write settles after one pass.
+  // The `unloading` flag stops the listener from fighting the
+  // uninstall-restore: restore moves parked providers BACK into `providers`
+  // (marker intact) and its write emits settings/updated — without the flag
+  // this listener would immediately re-park them behind the safety net's back.
+  let unloading = false
+  const reparkOnSettings = () => {
+    if (unloading) return
+    void parkDisabledProviders(ctx)?.catch?.(() => {})
+  }
+  reparkOnSettings()
+  if (typeof c.on === 'function' && typeof c.effect === 'function') {
+    c.effect(() => {
+      const off = c.on('settings/updated', (ns: string) => {
+        try {
+          if (ns !== 'llm-pi-ai') return
+          reparkOnSettings()
+        } catch { /* ignore */ }
+      })
+      return () => {
+        try { off?.() } catch { /* ignore */ }
+      }
+    }, 'dsh-model-pro: reinstall re-park on settings/updated')
+  } else {
+    // Fallback for harness contexts without event plumbing: settle async.
+    queueMicrotask(reparkOnSettings)
+  }
 
   // Uninstall / disable safety net: restore disabled providers to `providers`
   // (marker travels with them) so nothing is lost when this plugin goes away.
   // We hook the fiber effect's cleanup — the same pattern dsh-settings uses.
   if (typeof c.effect === 'function') {
     c.effect(() => () => {
+      unloading = true
       try {
         return restoreDisabledOnUnload(ctx)
       } catch {

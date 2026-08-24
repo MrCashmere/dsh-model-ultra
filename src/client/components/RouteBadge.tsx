@@ -98,23 +98,98 @@ export interface TurnTailOwnerLike {
   seq?: number
 }
 
-/** Window (epoch ms) of the LLM calls that can belong to this turn, or null
- * when the turn carries no usable boundary. Pure + throw-free: runs during
- * render for EVERY completed turn of every conversation. */
-export function selectTurnSelection(owner: TurnTailOwnerLike): { from: number; to: number } | null {
+/** Elect this turn's tail. Returns a coarse gate window PLUS the turn number so
+ * the component can refine it precisely against the session timeline. Pure +
+ * throw-free: runs during render for EVERY completed turn of every
+ * conversation. Returning non-null only means "this entry is eligible" — the
+ * real correlation window is recomputed in the component from `turnTimings`,
+ * which is the only source that knows where the NEXT turn begins (and thus
+ * where this turn's calls must stop), eliminating the ±slack overlap that made
+ * adjacent turns steal or drop each other's routing evidence. */
+export function selectTurnSelection(owner: TurnTailOwnerLike): { from: number; to: number; turn: number } | null {
   try {
     const t = owner && owner.turn
     if (!t || typeof t !== 'object') return null
+    const turnNo = typeof t.turn === 'number' ? t.turn : -1
     const start = t.start && typeof t.start.time === 'number' ? t.start.time : undefined
     const end = t.end && typeof t.end.time === 'number' ? t.end.time : undefined
-    // Tails publish on turn/end, so `end` should exist; fall back sensibly.
+    // Coarse fallback window (used only when turnTimings is unavailable).
     const SLACK = 5_000
     const from = (start !== undefined ? start : end !== undefined ? end - 10 * 60_000 : 0) - SLACK
     const to = (end !== undefined ? end : Date.now()) + SLACK
     if (!(to > from)) return null
-    return { from, to }
+    return { from, to, turn: turnNo }
   } catch {
     return null
+  }
+}
+
+/** Precise correlation window for a turn, read from the session chat snapshot.
+ * The window is `[thisTurnStart, nextTurnStart)` so a routed call is attributed
+ * to exactly one turn with NO overlap — the fix for "有时候有有时候没有".
+ * Encoded as a stable "from|to" string so a uSES selector never re-renders on
+ * identity churn. Returns '' when the snapshot can't answer (caller falls back
+ * to the coarse window).
+ *
+ * Source of truth: `snapshot.chat.timeline.turns` — a Map<turnNo, {turn,
+ * start:{time,seq}, end?:{time,seq}, status}> the conversation runtime keeps.
+ * We also accept the derived `snapshot.chat.legacy.turnTimings` (turnNo ->
+ * {startTime, endTime?}) and a top-level `turnTimings`, since which one is
+ * populated varies by DSH build. Reading the WRONG path (an earlier bug) made
+ * this silently fall back to the ±slack coarse window every time, so the
+ * overlap it was meant to remove never actually went away. */
+export function preciseWindowKey(snapshot: any, turnNo: number): string {
+  try {
+    if (turnNo < 0 || !snapshot || typeof snapshot !== 'object') return ''
+    const chat = snapshot.chat && typeof snapshot.chat === 'object' ? snapshot.chat : undefined
+
+    // Collect (turnNo -> startTime) from whichever source this build exposes.
+    // Prefer the live timeline.turns (has start.time), then legacy.turnTimings
+    // / turnTimings (startTime), then a bare top-level turnTimings.
+    const starts = new Map<number, number>()
+
+    const fromTurnsMap = (turns: any) => {
+      if (!turns || typeof turns.values !== 'function') return
+      for (const tn of turns.values()) {
+        if (tn && typeof tn.turn === 'number' && tn.start && typeof tn.start.time === 'number') {
+          if (!starts.has(tn.turn)) starts.set(tn.turn, tn.start.time)
+        }
+      }
+    }
+    const fromTimings = (timings: any) => {
+      if (!timings || typeof timings.entries !== 'function') return
+      for (const [k, v] of timings.entries()) {
+        if (typeof k === 'number' && v && typeof v.startTime === 'number' && !starts.has(k)) {
+          starts.set(k, v.startTime)
+        }
+      }
+    }
+
+    if (chat) {
+      fromTurnsMap(chat.timeline && chat.timeline.turns)
+      fromTimings(chat.legacy && chat.legacy.turnTimings)
+      fromTimings(chat.turnTimings)
+    }
+    fromTimings(snapshot.turnTimings)
+
+    const start = starts.get(turnNo)
+    if (start === undefined) return ''
+
+    // Smallest start strictly after this turn = where this turn's calls stop.
+    let nextStart = Infinity
+    for (const [k, s] of starts) {
+      if (k > turnNo && s > start && s < nextStart) nextStart = s
+    }
+    // Open-ended (latest turn): allow up to now + small slack so a just-finished
+    // turn's late-recorded log still lands inside.
+    const to = nextStart === Infinity ? Date.now() + 5_000 : nextStart
+    // Tiny lead-in slack so a call logged a hair before turn.start (clock
+    // granularity) is not lost; capped well under a typical turn gap.
+    const from = start - 1_000
+    if (!(to > from)) return ''
+    return `${from}|${to}`
+  } catch {
+    return ''
   }
 }
 
@@ -150,40 +225,82 @@ function routeLabel(route: string): string {
 
 /** The badge view. Renders nothing unless the pref is on AND this turn was
  * served through the smart router / a composite. */
-export function RouteBadgeView(props: any & { matched: { from: number; to: number } | null; call: CallFn }) {
+export function RouteBadgeView(props: any & { matched: { from: number; to: number; turn: number } | null; call: CallFn }) {
   const { matched, call } = props
   const sessionId = props.sessionId as string | undefined
+  const useSession = typeof props.useSession === 'function' ? (props.useSession as (sel: (s: any) => any) => any) : undefined
   const fallbackT = (k: string) => k
   const t = (props.t || fallbackT) as (k: string) => string
   const [state, setState] = React.useState<{ show: boolean; targets: ServingTarget[]; routes: Set<string> } | null>(null)
 
-  React.useEffect(() => {
-    if (!matched || !sessionId) return
-    let alive = true
-    void (async () => {
-      try {
-        let { show, entries } = await fetchBadgeData(call, sessionId)
-        let agg = targetsInWindow(entries, matched)
-        // A turn that JUST completed may not have its log entry in the cached
-        // page yet (the cache is a few seconds stale, and the host persists on
-        // a debounce). If the pref is on but this turn's window matched nothing,
-        // force one fresh fetch that bypasses the cache before giving up — this
-        // is what makes the 尾标 appear for the turn that just finished, and for
-        // a conversation that only switched to 智能路由 mid-way.
-        if (show && agg.targets.length === 0) {
-          const fresh = await fetchBadgeData(call, sessionId, true)
-          entries = fresh.entries
-          agg = targetsInWindow(entries, matched)
-        }
-        if (alive) setState({ show, targets: agg.targets, routes: agg.routes })
-      } catch {
-        if (alive) setState({ show: false, targets: [], routes: new Set() })
-      }
-    })()
-    return () => { alive = false }
-  }, [matched && matched.from, matched && matched.to, sessionId])
+  // Precise per-turn window read from the session timeline (turn -> next turn).
+  // Falls back to the coarse `matched` window when the timeline can't answer
+  // (older DSH build, missing timings, or a partial snapshot). Encoded as a
+  // string so this uSES selector is identity-stable and only re-renders when
+  // the boundary actually moves (e.g. a NEW turn starts after this one, which
+  // finally closes this turn's open-ended window — exactly when a late log
+  // could otherwise be misattributed).
+  const preciseKey: string = useSession && matched
+    ? useSession((snap: any) => preciseWindowKey(snap, matched.turn))
+    : ''
 
-  if (!matched || !state || !state.show || state.targets.length === 0) return null
+  // Resolve the effective correlation window from precise key or coarse matched.
+  const win = React.useMemo(() => {
+    if (preciseKey) {
+      const [f, to] = preciseKey.split('|')
+      const from = Number(f); const t2 = Number(to)
+      if (Number.isFinite(from) && Number.isFinite(t2) && t2 > from) return { from, to: t2 }
+    }
+    return matched ? { from: matched.from, to: matched.to } : null
+  }, [preciseKey, matched && matched.from, matched && matched.to])
+
+  React.useEffect(() => {
+    if (!win || !sessionId) return
+    let alive = true
+    // Bounded retry schedule (ms). The host records a turn's routing log entry
+    // only AFTER the LLM stream fully drains, which can land a few hundred ms
+    // AFTER turn/end fires and this tail first renders. A single fetch (or even
+    // one immediate cache-bypassing retry) can fall entirely inside that gap
+    // and then give up forever, because the effect deps never change again —
+    // THAT is the "有时候不显示" race. So we poll a few times with backoff,
+    // bypassing the cache, until the evidence shows up (or we exhaust retries).
+    const RETRY_DELAYS = [0, 500, 1200, 2500, 4500]
+    const timers: any[] = []
+    const canTimeout = typeof setTimeout === 'function'
+
+    const attempt = async (i: number): Promise<void> => {
+      if (!alive) return
+      let show = true
+      let agg = { targets: [] as ServingTarget[], routes: new Set<string>(), fallbacks: 0 }
+      try {
+        const res = await fetchBadgeData(call, sessionId, i > 0)
+        show = res.show
+        agg = targetsInWindow(res.entries, win)
+      } catch {
+        show = false
+      }
+      if (!alive) return
+      // Pref off → render nothing and stop retrying.
+      if (!show) { setState({ show: false, targets: [], routes: new Set() }); return }
+      // Got evidence → render and stop.
+      if (agg.targets.length > 0) { setState({ show: true, targets: agg.targets, routes: agg.routes }); return }
+      // No evidence yet. Keep whatever we already show (avoid flicker), and
+      // schedule the next attempt if any remain.
+      if (i + 1 < RETRY_DELAYS.length && canTimeout) {
+        timers.push(setTimeout(() => { void attempt(i + 1) }, RETRY_DELAYS[i + 1]))
+      } else {
+        // Exhausted: only now commit an empty (non-rendering) state.
+        setState((prev) => (prev && prev.targets.length > 0 ? prev : { show: true, targets: [], routes: new Set() }))
+      }
+    }
+    void attempt(0)
+    return () => {
+      alive = false
+      for (const id of timers) { try { clearTimeout(id) } catch { /* ignore */ } }
+    }
+  }, [win && win.from, win && win.to, sessionId])
+
+  if (!win || !state || !state.show || state.targets.length === 0) return null
 
   const anyFallback = state.targets.some((x) => x.fellBack)
   return (
