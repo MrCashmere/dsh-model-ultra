@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7 — 2026-08-24
+
+- feat: enhance turn selection and correlation window handling in RouteBadge component
+- feat: enhance observability with persistent stats and request log management
+- feat: add links section with Linux community resource
+
 ## 1.1.6 — 2026-08-22
 
 - feat(ui): add UI preferences for conversation badge visibility
