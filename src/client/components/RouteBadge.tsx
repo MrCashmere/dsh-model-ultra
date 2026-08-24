@@ -35,14 +35,26 @@ interface SelectionLogEntry {
 }
 
 // --- tiny caches so a page of historical turns costs at most one RPC --------
+//
+// The log cache is keyed BY SESSION and fetched WITH the sessionId, so the
+// host's `limit` applies within this conversation instead of across every
+// session. This is what fixes "长对话尾标不显示": an agent turn fires many
+// tool-loop LLM calls, so a global last-200 window is quickly eaten by the
+// most recent turns and older turns in the same long conversation lose their
+// routing evidence. Scoping the fetch to the session (and asking for the whole
+// ring) keeps far more turns covered.
 
 const PREF_TTL_MS = 30_000
 let prefCache: { value: boolean; at: number } | null = null
 
 const LOG_TTL_MS = 2_000
-let logCache: { bySession: Map<string, SelectionLogEntry[]>; at: number } | null = null
+/** How many entries to pull for one session — the full host ring capacity, so
+ * a long conversation keeps as many turns' worth of evidence as the host
+ * retains (the host caps this at 500). */
+const LOG_FETCH_LIMIT = 500
+const logCache = new Map<string, { entries: SelectionLogEntry[]; at: number }>()
 
-async function fetchBadgeData(call: CallFn, sessionId: string): Promise<{ show: boolean; entries: SelectionLogEntry[] }> {
+async function fetchBadgeData(call: CallFn, sessionId: string, force = false): Promise<{ show: boolean; entries: SelectionLogEntry[] }> {
   const now = Date.now()
   let show = true
   if (prefCache === null || now - prefCache.at > PREF_TTL_MS) {
@@ -56,26 +68,27 @@ async function fetchBadgeData(call: CallFn, sessionId: string): Promise<{ show: 
   }
   if (!show) return { show: false, entries: [] }
 
-  if (logCache === null || now - logCache.at > LOG_TTL_MS) {
-    const bySession = new Map<string, SelectionLogEntry[]>()
-    try {
-      const r = await call('list-request-logs', { limit: 200 })
-      for (const e of (r?.entries || []) as SelectionLogEntry[]) {
-        if (!e || typeof e.ts !== 'number' || !e.target || typeof e.sessionId !== 'string') continue
-        const list = bySession.get(e.sessionId) || []
-        list.push(e)
-        bySession.set(e.sessionId, list)
-      }
-    } catch { /* empty */ }
-    logCache = { bySession, at: now }
+  const cached = logCache.get(sessionId)
+  if (!force && cached && now - cached.at <= LOG_TTL_MS) {
+    return { show: true, entries: cached.entries }
   }
-  return { show: true, entries: logCache.bySession.get(sessionId) || [] }
+  const entries: SelectionLogEntry[] = []
+  try {
+    // Filter by sessionId HOST-SIDE so the limit is per-conversation, not global.
+    const r = await call('list-request-logs', { sessionId, limit: LOG_FETCH_LIMIT })
+    for (const e of (r?.entries || []) as SelectionLogEntry[]) {
+      if (!e || typeof e.ts !== 'number' || !e.target) continue
+      entries.push(e)
+    }
+  } catch { /* empty */ }
+  logCache.set(sessionId, { entries, at: Date.now() })
+  return { show: true, entries }
 }
 
 /** Test hook — drop all caches. */
 export function resetRouteBadgeCaches(): void {
   prefCache = null
-  logCache = null
+  logCache.clear()
 }
 
 // --- slot wiring ------------------------------------------------------------
@@ -149,8 +162,19 @@ export function RouteBadgeView(props: any & { matched: { from: number; to: numbe
     let alive = true
     void (async () => {
       try {
-        const { show, entries } = await fetchBadgeData(call, sessionId)
-        const agg = targetsInWindow(entries, matched)
+        let { show, entries } = await fetchBadgeData(call, sessionId)
+        let agg = targetsInWindow(entries, matched)
+        // A turn that JUST completed may not have its log entry in the cached
+        // page yet (the cache is a few seconds stale, and the host persists on
+        // a debounce). If the pref is on but this turn's window matched nothing,
+        // force one fresh fetch that bypasses the cache before giving up — this
+        // is what makes the 尾标 appear for the turn that just finished, and for
+        // a conversation that only switched to 智能路由 mid-way.
+        if (show && agg.targets.length === 0) {
+          const fresh = await fetchBadgeData(call, sessionId, true)
+          entries = fresh.entries
+          agg = targetsInWindow(entries, matched)
+        }
         if (alive) setState({ show, targets: agg.targets, routes: agg.routes })
       } catch {
         if (alive) setState({ show: false, targets: [], routes: new Set() })

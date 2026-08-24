@@ -22,7 +22,7 @@ import { registerRouterAdapter } from './router'
 import { registerStreamRewrite } from './streamRewrite'
 import { restoreDisabledOnUnload, parkDisabledProviders } from './lifecycle'
 import { initHealthTracker, resetHealthSingleton } from './health'
-import { resetObservabilitySingletons } from './statsStore'
+import { resetObservabilitySingletons, hydrateObservability, persistStats } from './statsStore'
 
 /** Loader entry id / client bundle id. */
 export const name = PACKAGE
@@ -41,6 +41,23 @@ export function apply(ctx: HostCtx) {
   resetHealthSingleton()
   resetObservabilitySingletons()
   initHealthTracker(ctx)
+  // Seed the stats recorder + request-log ring from the persisted snapshot so
+  // the 观测台 and the conversation route badge are populated after a page
+  // refresh / host restart instead of starting blank.
+  hydrateObservability(ctx)
+
+  // Debounced persistence of the stats aggregates + a capped request-log tail
+  // onto the settings snapshot, so 输入/输出 token 统计 and the routing 尾标
+  // survive a reload. A burst of routed calls costs at most one write per
+  // interval (the recorder's dirty flag skips no-op flushes); a final flush
+  // runs on unload.
+  const timer = c.get('timer') as { interval?: (fn: () => void, ms: number) => () => void } | undefined
+  if (timer && typeof timer.interval === 'function') {
+    timer.interval(() => { void persistStats(ctx) }, 5000)
+  }
+  if (typeof c.effect === 'function') {
+    c.effect(() => () => { void persistStats(ctx, { force: true }) }, 'dsh-model-pro: stats flush')
+  }
 
   // Smart routing: expose route combos + composites as models on the synthetic
   // "router" / "composite" routes, forwarding calls to real targets.

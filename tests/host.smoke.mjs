@@ -155,18 +155,25 @@ const log = { section: () => store.doc() }
 const llm = createLlm(log)
 const cleanups = []
 const listeners = {}
+const timerCallbacks = []
 const ctx = {
   get: (name) => (
     name === 'settings' ? store
       : name === 'llm' ? llm
         : name === 'credentials' ? creds
-          : undefined
+          : name === 'timer' ? {
+            interval: (fn, _ms) => { timerCallbacks.push(fn); return () => {} },
+            timeout: (fn, ms) => { const id = setTimeout(fn, ms); return () => clearTimeout(id) },
+          }
+            : undefined
   ),
   // Typert registry stub: apply() registers its manifest through this.
   typert: { register: () => () => {} },
   on: (name, fn) => { (listeners[name] = listeners[name] || []).push(fn); return () => {} },
   effect: (fn) => { const c = fn(); if (typeof c === 'function') cleanups.push(c) },
 }
+/** Fire every registered interval callback once (deterministic flush). */
+const tick = async () => { for (const fn of timerCallbacks) { try { await fn() } catch { /* ignore */ } } }
 const { apply, runtimes } = await loadHost()
 apply(ctx)
 
@@ -728,6 +735,55 @@ const compLog = r.entries.find((e) => e.route === 'mixture::gpt-4o')
 assert(compLog && compLog.status === 'ok' && typeof compLog.latencyMs === 'number', 'composite log entry recorded: ' + JSON.stringify(compLog))
 r = await P('clear-request-logs')
 assert(r.ok && (await P('list-request-logs')).entries.length === 0, 'clear-request-logs empties ring')
+
+// --- token accounting: the router must read the CANONICAL DSH TokenUsage
+// chunk shape (camelCase inputTokens/outputTokens, what pi-ai's mapUsage
+// emits), not just the raw snake_case names. This is the "输入输出 token 显示
+// 为空 / 统计为空" regression. ---
+llm.scriptedStreams.set('camelgw', async function* () {
+  yield { type: 'block-start', index: 0, blockType: 'text' }
+  yield { type: 'text-delta', index: 0, text: 'pong' }
+  yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 7 } }
+  yield { type: 'finish', reason: { kind: 'stop' } }
+})
+await P('create-provider', { route: 'camelgw', baseURL: 'https://camel/v1' }).catch(() => {})
+await P('set-route', { alias: 'auto-camel', strategy: 'priority', targets: [{ provider: 'camelgw', model: 'x' }] })
+{
+  for await (const c of rreg.adapter.stream({
+    provider: 'router', model: 'auto-camel',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    temperature: 0, maxTokens: 16, sessionId: 'sess-camel',
+  })) { /* drain */ }
+  const rs = await P('get-route-stats')
+  const tk = Object.keys(rs.byTarget || {}).find((k) => k.includes('camelgw'))
+  assert(tk && rs.byTarget[tk].tokensIn === 12 && rs.byTarget[tk].tokensOut === 7,
+    'camelCase TokenUsage counted into stats: ' + JSON.stringify(tk && rs.byTarget[tk]))
+  const lg = await P('list-request-logs', { sessionId: 'sess-camel' })
+  const camelLog = (lg.entries || []).find((e) => e.route === 'auto-camel')
+  assert(camelLog && camelLog.tokens && camelLog.tokens.in === 12 && camelLog.tokens.out === 7,
+    'camelCase tokens land on the request-log entry: ' + JSON.stringify(camelLog && camelLog.tokens))
+}
+
+// --- persistence: stats + a capped request-log tail are written to the
+// settings snapshot (routeStats) so the 观测台 and the conversation 尾标 survive
+// a page refresh / host restart, and a FRESH fiber re-hydrates them. This is
+// the "统计为空 / 尾标不会持久化" regression. ---
+{
+  await tick() // debounced flush fires the persisted snapshot
+  const snap = store.doc().routeStats
+  assert(snap && typeof snap === 'object', 'routeStats snapshot persisted to settings: ' + JSON.stringify(Object.keys(store.doc())))
+  assert(snap.byTarget && Object.keys(snap.byTarget).some((k) => k.includes('camelgw')), 'aggregate stats persisted: ' + JSON.stringify(snap.byTarget && Object.keys(snap.byTarget)))
+  assert(Array.isArray(snap.logs) && snap.logs.some((e) => e.route === 'auto-camel'), 'request-log tail persisted: ' + JSON.stringify(snap.logs && snap.logs.length))
+
+  // Simulate a page refresh / host restart: a brand-new fiber (fresh apply)
+  // must re-hydrate the recorder + log ring from that snapshot rather than
+  // starting blank.
+  apply(ctx)
+  const rs2 = await P('get-route-stats')
+  assert(rs2.byTarget && Object.keys(rs2.byTarget).some((k) => k.includes('camelgw')), 're-applied fiber re-hydrates stats: ' + JSON.stringify(Object.keys(rs2.byTarget || {})))
+  const lg2 = await P('list-request-logs', { sessionId: 'sess-camel' })
+  assert((lg2.entries || []).some((e) => e.route === 'auto-camel'), 're-applied fiber re-hydrates request-log tail')
+}
 
 // --- ui prefs: badge toggle persists under llm-pi-ai[uiPrefs] and merges ---
 r = await P('get-ui-prefs')

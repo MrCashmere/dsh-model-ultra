@@ -3,19 +3,29 @@
  * Sandbox constraint: the dynamic Host half has NO node `fs`/`require`/`fetch`;
  * only settings + cordis services. So aggregation that must survive the session
  * lives in the `llm-pi-ai` settings section under ROUTE_STATS_KEY (a bounded,
- * small object — call counts, latency, tokens, probe health). The high-frequency
- * per-request log is kept as a bounded in-memory ring buffer (last N) and served
- * by a handler; it is not persisted, which keeps `settings.replace` from being
- * hammered by every call. Optional JSONL persistence behind `ctx.get('fs')` is a
- * best-effort future enhancement, not required for correctness.
+ * small object — call counts, latency, tokens, probe health, and a capped tail
+ * of the per-request log). `settings.replace` is not hammered per call: writes
+ * are DEBOUNCED onto a timer (see index.ts) and on unload, so a burst of routed
+ * calls costs at most one persisted write per interval. Persisting the log tail
+ * (not just aggregates) is what lets the conversation route badge and the 观测台
+ * survive a page refresh or a host restart — without it both go blank because
+ * the in-memory ring/recorder start empty on every fresh fiber.
  */
 
 import type { HostCtx } from './utils'
 import { readRoutesRootKey, writeRoutesRootKey } from './utils'
 import type { RouteStats, RequestLogEntry, TargetHealth } from '../shared/types'
 
-/** Bounded request-log ring capacity. */
-export const LOG_RING_CAPACITY = 500
+/** Bounded request-log ring capacity (in memory). Sized generously so a long
+ * conversation — where a single agent turn can fire dozens of tool-loop LLM
+ * calls — keeps enough recent turns' routing evidence for the badge to light
+ * up when the user scrolls back. Memory cost is small (~150 bytes/entry). */
+export const LOG_RING_CAPACITY = 2000
+
+/** How many request-log entries are persisted to settings. Smaller than the
+ * in-memory ring so the settings section stays bounded, while still covering
+ * enough recent turns for the badge to light up after a reload. */
+export const LOG_PERSIST_CAP = 400
 
 /** Snapshot shape stored under llm-pi-ai[ROUTE_STATS_KEY]. */
 export interface StatsSnapshot {
@@ -26,6 +36,8 @@ export interface StatsSnapshot {
   byRoute: Record<string, RouteStats>
   /** Probe health per target. */
   health: Record<string, TargetHealth>
+  /** Capped tail of the per-request log, so the badge/观测台 survive a reload. */
+  logs?: RequestLogEntry[]
 }
 
 export function readStatsSnapshot(ctx: HostCtx): StatsSnapshot {
@@ -48,11 +60,47 @@ export function readStatsSnapshot(ctx: HostCtx): StatsSnapshot {
     }
   }
   if (r.health && typeof r.health === 'object') s.health = r.health as Record<string, TargetHealth>
+  if (Array.isArray(r.logs)) {
+    const logs: RequestLogEntry[] = []
+    for (const raw of r.logs as unknown[]) {
+      const e = normalizeLogEntry(raw)
+      if (e) logs.push(e)
+    }
+    if (logs.length) s.logs = logs.slice(-LOG_PERSIST_CAP)
+  }
   return s
 }
 
 export async function writeStatsSnapshot(ctx: HostCtx, snap: StatsSnapshot): Promise<void> {
   await writeRoutesRootKey(ctx.get('settings'), 'routeStats', snap)
+}
+
+/** Validate/rebuild one persisted request-log entry (drops undefineds so the
+ * host->client RPC boundary and settings persistence both stay JSON-clean). */
+function normalizeLogEntry(raw: unknown): RequestLogEntry | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const target = r.target as Record<string, unknown> | undefined
+  if (typeof r.ts !== 'number' || !target || typeof target.provider !== 'string' || typeof target.model !== 'string') return null
+  const status = r.status === 'ok' || r.status === 'error' || r.status === 'fallback' ? r.status : 'ok'
+  const tokensRaw = r.tokens as Record<string, unknown> | undefined
+  const tokens: { in?: number; out?: number } = {}
+  if (tokensRaw && typeof tokensRaw === 'object') {
+    if (typeof tokensRaw.in === 'number') tokens.in = tokensRaw.in
+    if (typeof tokensRaw.out === 'number') tokens.out = tokensRaw.out
+  }
+  const entry: RequestLogEntry = {
+    ts: r.ts,
+    route: typeof r.route === 'string' ? r.route : '',
+    target: { provider: target.provider, model: target.model },
+    status,
+    tryIndex: typeof r.tryIndex === 'number' ? r.tryIndex : 1,
+    latencyMs: typeof r.latencyMs === 'number' ? r.latencyMs : 0,
+    tokens,
+  }
+  if (typeof r.sessionId === 'string') entry.sessionId = r.sessionId
+  if (typeof r.error === 'string') entry.error = r.error
+  return entry
 }
 
 function normalizeStats(v: Record<string, number>): RouteStats {
@@ -84,10 +132,14 @@ export interface LogRing {
   push(entry: RequestLogEntry): void
   entries(): RequestLogEntry[]
   clear(): void
+  /** Seed the ring from persisted entries (dedup by ts+target+tryIndex so a
+   * re-hydrate never double-counts). Called once on apply. */
+  hydrate(entries: RequestLogEntry[]): void
 }
 
 export function createLogRing(capacity = LOG_RING_CAPACITY): LogRing {
   const buf: RequestLogEntry[] = []
+  const keyOf = (e: RequestLogEntry) => `${e.ts}\u0000${e.target.provider}\u0000${e.target.model}\u0000${e.tryIndex}`
   return {
     push(entry) {
       buf.push(entry)
@@ -95,6 +147,14 @@ export function createLogRing(capacity = LOG_RING_CAPACITY): LogRing {
     },
     entries: () => buf.slice(),
     clear: () => { buf.length = 0 },
+    hydrate(entries) {
+      if (!entries.length) return
+      const seen = new Set(buf.map(keyOf))
+      const merged = [...entries.filter((e) => !seen.has(keyOf(e))), ...buf]
+      merged.sort((a, b) => a.ts - b.ts)
+      buf.length = 0
+      buf.push(...merged.slice(-capacity))
+    },
   }
 }
 
@@ -118,11 +178,19 @@ export interface StatsRecorder {
   byRoute(): Record<string, RouteStats>
   byTarget(): Record<string, RouteStats>
   reset(): void
+  /** True since the last `clearDirty()` if any call was recorded — the
+   * debounced persister uses this to skip no-op writes. */
+  isDirty(): boolean
+  clearDirty(): void
+  /** Seed the aggregates from a persisted snapshot (called once on apply so
+   * the 观测台 is not blank after a reload). Never marks dirty. */
+  hydrate(snap: { byRoute?: Record<string, RouteStats>; byTarget?: Record<string, RouteStats> }): void
 }
 
 export function createStatsRecorder(): StatsRecorder {
   const byRoute: Record<string, RouteStats> = {}
   const byTarget: Record<string, RouteStats> = {}
+  let dirty = false
   const bump = (m: Record<string, RouteStats>, k: string, opts: { ok: boolean; latencyMs: number; tokensIn?: number; tokensOut?: number }) => {
     const cur: RouteStats = m[k] || { calls: 0, errors: 0, latencySum: 0, latencyN: 0, tokensIn: 0, tokensOut: 0 }
     m[k] = accumulateStats(cur, opts)
@@ -145,6 +213,7 @@ export function createStatsRecorder(): StatsRecorder {
         },
         ...(error ? { error } : {}),
       })
+      dirty = true
     },
     byRoute: () => ({ ...byRoute }),
     byTarget: () => ({ ...byTarget }),
@@ -152,6 +221,13 @@ export function createStatsRecorder(): StatsRecorder {
       for (const k of Object.keys(byRoute)) delete byRoute[k]
       for (const k of Object.keys(byTarget)) delete byTarget[k]
       getLogRing().clear()
+      dirty = true
+    },
+    isDirty: () => dirty,
+    clearDirty: () => { dirty = false },
+    hydrate: (snap) => {
+      if (snap.byRoute) for (const [k, v] of Object.entries(snap.byRoute)) if (!byRoute[k]) byRoute[k] = v
+      if (snap.byTarget) for (const [k, v] of Object.entries(snap.byTarget)) if (!byTarget[k]) byTarget[k] = v
     },
   }
 }
@@ -173,4 +249,42 @@ export function getStatsRecorder(): StatsRecorder {
 export function resetObservabilitySingletons(): void {
   _logRing = undefined
   _statsRecorder = undefined
+}
+
+/** Hydrate the in-memory recorder + log ring from the persisted snapshot so the
+ * 观测台 and the conversation route badge are populated on a fresh fiber (page
+ * refresh / host restart). Idempotent — safe to call once per apply. Health is
+ * hydrated separately by the health tracker. */
+export function hydrateObservability(ctx: HostCtx): void {
+  try {
+    const snap = readStatsSnapshot(ctx)
+    getStatsRecorder().hydrate({ byRoute: snap.byRoute, byTarget: snap.byTarget })
+    if (snap.logs && snap.logs.length) getLogRing().hydrate(snap.logs)
+    // The recorder is now seeded from disk, not from a live call — do not let
+    // that count as a pending write.
+    getStatsRecorder().clearDirty()
+  } catch { /* best effort */ }
+}
+
+/** Persist the aggregate stats + a capped tail of the request log into the
+ * settings snapshot, PRESERVING the health map the health tracker owns. Skips
+ * the write entirely when nothing changed since the last flush. Returns true
+ * when a write happened. */
+export async function persistStats(ctx: HostCtx, opts?: { force?: boolean }): Promise<boolean> {
+  const rec = getStatsRecorder()
+  if (!opts?.force && !rec.isDirty()) return false
+  try {
+    const prev = readStatsSnapshot(ctx)
+    const logs = getLogRing().entries().slice(-LOG_PERSIST_CAP)
+    await writeStatsSnapshot(ctx, {
+      byRoute: rec.byRoute(),
+      byTarget: rec.byTarget(),
+      health: prev.health || {},
+      logs,
+    })
+    rec.clearDirty()
+    return true
+  } catch {
+    return false
+  }
 }

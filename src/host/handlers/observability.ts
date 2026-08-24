@@ -10,7 +10,7 @@
  * so the page can show last-known status across page reloads. */
 
 import type { HostCtx } from '../utils'
-import { getLogRing, getStatsRecorder } from '../statsStore'
+import { getLogRing, getStatsRecorder, persistStats } from '../statsStore'
 import { readProviders, readDisabled } from '../utils'
 import { getHealthTracker } from '../health'
 
@@ -56,8 +56,12 @@ export async function listRequestLogs(ctx: HostCtx, args?: { limit?: number; rou
   return jsonSafe({ ok: true as const, entries: entries.slice(-limit) })
 }
 
-export async function clearRequestLogs() {
+export async function clearRequestLogs(ctx?: HostCtx) {
   getLogRing().clear()
+  getStatsRecorder().reset()
+  // Persist the cleared state immediately so a reload does not resurrect the
+  // logs/stats from the last snapshot.
+  if (ctx) await persistStats(ctx, { force: true })
   return { ok: true as const }
 }
 

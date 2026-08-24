@@ -103,7 +103,7 @@ export class ModelProRuntime extends (TypertRemoteService as any) {
     return listRequestLogs(this.ctx, args || {})
   }
   async clearRequestLogs() {
-    return clearRequestLogs()
+    return clearRequestLogs(this.ctx)
   }
   async probeTarget(args: any) {
     return probeTarget(this.ctx, args || {})

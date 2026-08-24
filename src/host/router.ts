@@ -103,15 +103,24 @@ function buildTargetOptions(callConfig: Record<string, unknown>, options: Record
   return o
 }
 
-/** Usage tokens from a finish chunk (adapter-optional; best effort). */
+/** Usage tokens from a `usage` (or finish) chunk (adapter-optional; best
+ * effort). The real DSH stream emits a `{ type: 'usage', usage: TokenUsage }`
+ * chunk whose fields are camelCase (`inputTokens` / `outputTokens`, per
+ * `@deepseek-ai/dsh-llm`'s `TokenUsage`, which pi-ai's `mapUsage` fills). Older
+ * / raw OpenAI-style snake_case names are accepted as a fallback so a
+ * non-standard adapter still counts. */
 function tokensFrom(chunk: Record<string, any>): { in?: number; out?: number } {
   const u = chunk && chunk.usage
   if (!u || typeof u !== 'object') return {}
   const out: { in?: number; out?: number } = {}
-  if (typeof u.prompt_tokens === 'number') out.in = u.prompt_tokens
-  if (typeof u.input_tokens === 'number') out.in = u.input_tokens
-  if (typeof u.completion_tokens === 'number') out.out = u.completion_tokens
-  if (typeof u.output_tokens === 'number') out.out = u.output_tokens
+  // Canonical DSH TokenUsage shape (camelCase) — the production path.
+  if (typeof u.inputTokens === 'number') out.in = u.inputTokens
+  if (typeof u.outputTokens === 'number') out.out = u.outputTokens
+  // Raw provider shapes (snake_case) — accepted as a fallback.
+  if (out.in === undefined && typeof u.prompt_tokens === 'number') out.in = u.prompt_tokens
+  if (out.in === undefined && typeof u.input_tokens === 'number') out.in = u.input_tokens
+  if (out.out === undefined && typeof u.completion_tokens === 'number') out.out = u.completion_tokens
+  if (out.out === undefined && typeof u.output_tokens === 'number') out.out = u.output_tokens
   return out
 }
 
