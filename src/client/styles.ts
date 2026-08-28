@@ -23,8 +23,11 @@ export const CSS = [
   '.mpro-btn:active:not(:disabled){transform:translateY(1px)}',
   '.mpro-btn:disabled{opacity:.45;cursor:not-allowed}',
   '.mpro-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}',
-  '.mpro-btnPrimary{background:var(--dsw-alias-brand-primary);color:#fff;border-color:transparent}',
-  '.mpro-btnPrimary:hover:not(:disabled){background:var(--dsw-alias-brand-primary-hover,var(--dsw-alias-brand-primary))}',
+  // Primary fill must follow the DSW button pair: `brand-primary` inverts per
+  // theme (near-black in light, near-white in dark), so pairing it with a hard
+  // `#fff` label rendered white-on-white in dark mode.
+  '.mpro-btnPrimary{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground,#fff);border-color:transparent}',
+  '.mpro-btnPrimary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary)));border-color:transparent}',
   '.mpro-btnDanger{color:var(--dsw-alias-state-error-primary);border-color:transparent}',
   '.mpro-btnDanger:hover:not(:disabled){background:var(--dsw-alias-state-error-fill,var(--dsw-alias-interactive-bg-hover-danger))}',
   '.mpro-btnGhost{border-color:transparent;color:var(--dsw-alias-label-secondary)}',
