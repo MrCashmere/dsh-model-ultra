@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.8 — 2026-08-28
+
+- fix(ui): primary button label unreadable in dark mode
+
 ## 1.1.7 — 2026-08-24
 
 - feat: enhance turn selection and correlation window handling in RouteBadge component
