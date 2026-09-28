@@ -222,9 +222,42 @@ export function ThinkingPanel({ t, call, data, busy, setBusy, setStatus, fail, i
     </select>
   )
 
+  /**
+   * How this draft shows up in DSH's own chat picker.
+   *
+   * The picker's Effort pane is built from the per-model `reasoningEfforts` map
+   * only (`llm-pi-ai`'s `reasoningInfo` returns nothing without it), and the row
+   * label is always DSH's own level name — the wire spelling never reaches the
+   * UI. The route default only marks one row preselected. Mirrored here so the
+   * page cannot promise something the picker will not show.
+   */
+  const rowLabel = (level: ThinkingLevel) => `${level.charAt(0).toUpperCase()}${level.slice(1)}`
+  const pickerOf = (draft: EffortDraft, row: ModelRow): { text: string; rows: string[]; warn: string | null } => {
+    if (draft.mode === 'none') return { text: t('thinkingPickerNone'), rows: [], warn: null }
+    if (draft.mode === 'inherit') {
+      // A catalog model may already declare levels upstream, so inheriting is only
+      // suspicious where the entry itself is hand-declared (`models[i]`): there the
+      // route default would describe nothing and the request path would refuse it.
+      const warn = row.storage === 'models' && reasoning !== '' ? t('thinkingPickerWarnNoLevels') : null
+      return { text: t('thinkingPickerInherit'), rows: [], warn }
+    }
+    const levels = THINKING_LEVELS.filter((level) => draft.levels[level].on)
+    if (levels.length === 0) return { text: t('thinkingPickerNoRows'), rows: [], warn: null }
+    const defaultLevel = levels.find((level) => level === reasoning)
+    return {
+      text: `${rowsText(levels)}${defaultLevel === undefined ? '' : ` · ${t('thinkingPickerDefault')} ${rowLabel(defaultLevel)}`}`,
+      rows: levels.map(rowLabel),
+      warn: null,
+    }
+  }
+  function rowsText(levels: readonly ThinkingLevel[]): string {
+    return levels.map(rowLabel).join(' / ')
+  }
+
   return (
     <div className="mpro-panel">
       <p className="mpro-hint">{t('thinkingIntro')}</p>
+      <p className="mpro-note">{t('thinkingPickerIntro')}</p>
 
       <h3 className="mpro-subTitle">{t('thinkingRouteTitle')}</h3>
       <div className="mpro-grid2">
@@ -267,20 +300,23 @@ export function ThinkingPanel({ t, call, data, busy, setBusy, setStatus, fail, i
         </label>
       </div>
 
-      <div className="mpro-hdrRow" style={{ marginTop: 10 }}>
+      <div className="mpro-budgetRow">
         <label className="mpro-check">
           <input type="checkbox" checked={budgetsOn} onChange={(e) => setBudgetsOn(e.target.checked)} />
           <span>{t('thinkingBudgets')}</span>
         </label>
         {THINKING_BUDGET_KEYS.map((key) => (
-          <input
-            key={key}
-            className="mpro-input mpro-inputNum"
-            placeholder={key}
-            disabled={!budgetsOn}
-            value={budgets[key]}
-            onChange={(e) => setBudgets((b) => ({ ...b, [key]: e.target.value }))}
-          />
+          <label key={key} className="mpro-budgetField">
+            <span className="mpro-budgetKey">{key}</span>
+            <input
+              className="mpro-input mpro-inputNum"
+              inputMode="numeric"
+              placeholder="0"
+              disabled={!budgetsOn}
+              value={budgets[key]}
+              onChange={(e) => setBudgets((b) => ({ ...b, [key]: e.target.value }))}
+            />
+          </label>
         ))}
       </div>
       <p className="mpro-hint">{t('thinkingBudgetHint')}</p>
@@ -298,6 +334,7 @@ export function ThinkingPanel({ t, call, data, busy, setBusy, setStatus, fail, i
           {rows.map((row) => {
             const draft = draftFor(row)
             const open = openModel === row.id
+            const picker = pickerOf(draft, row)
             return (
               <div key={row.id} className="mpro-thCard">
                 <div className="mpro-thHead">
@@ -306,10 +343,18 @@ export function ThinkingPanel({ t, call, data, busy, setBusy, setStatus, fail, i
                     <span className="mpro-thId">{row.id}</span>
                   </button>
                   <span className="mpro-thSummary">{summaryOf(row)}</span>
+                  {picker.warn !== null && (
+                    <span className="mpro-chip mpro-chipWarn" title={picker.warn}>{t('thinkingPickerWarnShort')}</span>
+                  )}
                   <span className="mpro-pill">{row.storage === 'models' ? t('thinkingStoreModels') : t('thinkingStoreOverrides')}</span>
                 </div>
                 {open && (
                   <div className="mpro-thBody">
+                    <div className="mpro-pickerRow">
+                      <span className="mpro-pickerLabel">{t('thinkingPickerRows')}</span>
+                      <span className="mpro-pickerValue">{picker.text}</span>
+                    </div>
+                    {picker.warn !== null && <p className="mpro-hint">{picker.warn}</p>}
                     <div className="mpro-tabs">
                       {(['inherit', 'none', 'custom'] as const).map((mode) => (
                         <button
@@ -331,6 +376,7 @@ export function ThinkingPanel({ t, call, data, busy, setBusy, setStatus, fail, i
                             </button>
                           ))}
                         </div>
+                        <p className="mpro-hint">{t('thinkingPresetHint')}</p>
                         <table className="mpro-thTable">
                           <thead>
                             <tr>

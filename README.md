@@ -74,6 +74,8 @@
 - **路由级默认** —— 默认等级 `reasoning`：`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`；四个 token 预算 `thinkingBudgets`（minimal / low / medium / high）；思考相关 `compat`：`thinkingFormat`、`thinkingTokenBudgetField`、`supportsReasoningEffort`、`supportsThinkingTokenBudget`、`requiresThinkingAsText`、`forceAdaptiveThinking`。下拉的「继承」= 不写该字段，把决定权留给目录。
 - **逐模型档位 + 手动取值** —— 每个模型可设「**继承目录 / 非推理（false）/ 自定义档位**」。自定义时**一行一个档位**：勾选是否提供该档，文本框**手动填写发给网关的线上取值**（例如 `high`、某个网关方言的 `reasoning_effort` 值），并附**每档预设值按钮**；整表还可**一键预设**（两档 / 四档 / 五档 / 全七档 / 非推理）。
 - **写入位置正确** —— 显式 `models` 列表的提供商写回 `models[i]`；**内置目录路由写 `modelOverrides[id]`**，目录本身保持完整（不会被收窄成一份手写列表）。
+- **直接在 DSH 自己的模型选择器里可选** —— 保存后，聊天输入框的模型选择器（`conversation.input.model` 座位）里该模型会多出 **Effort** 一栏，选项就是这里勾选的档位，默认选中的是「默认等级」。选择器里的选项名始终是 DSH 的档位名（Off / Minimal / Low / Medium / High / Xhigh / Max），真正发给网关的取值由「线上取值」决定 —— 例如 `max: ultra` 在选择器里显示 `Max`，请求里发 `ultra`。**无需重启**：设置写入会触发 `settings/document-updated`，选择器随即刷新。
+- **页面如实预告选择器结果** —— 每个模型卡片展开后有一行「聊天框 Effort 可选」预览；手写模型没有声明档位却设了路由默认等级时，卡片上会出现「无档位」告警（这种组合下请求会被 `UNSUPPORTED_REASONING_EFFORT` 拒绝）。
 - **不可能保存出非法配置** —— 归一化与 `llm-pi-ai` 的 `resolveModelReasoning()` 规则一致（该规则不在 schema 里）：只有 `off` 档可以留空（`off:` → `null`），其余档位必须有取值且不能是空串；只有 `{off: ...}` 一项非法（非推理请用 `false`）；空对象 = 删除字段（继承目录）。
 
 ### OpenRouter 提供商路由
@@ -164,6 +166,7 @@ npm test            # host + client 冒烟测试
 2. **拉取模型** —— 「模型」标签页点「获取远端模型」，勾选后「替换为选中」或「合并选中」。
 3. **连通性测试** —— 「测试」标签页选一个模型点「运行测试」，确认延迟、停止原因与回复。
 4. **思考强度**（可选）—— 「思考强度」标签页设路由级默认等级 / 预算 / 兼容开关；下方逐模型开卡片，选「自定义档位」后勾选档位并**手动填写线上取值**（或点预设按钮），保存即写回 `models[i]` 或 `modelOverrides[id]`。
+   **然后在聊天框验证**：点聊天输入框的模型选择器 → 选中该模型 → 多出的 **Effort** 一栏里就是刚才勾选的档位，默认选中「默认等级」。卡片展开后的「聊天框 Effort 可选」预览与它一致。想让选择器里有档位，**必须**给该模型写至少一个档位（除了 `off`）；只设路由级「默认等级」不会新增档位。
 5. **OpenRouter**（可选）—— 「OpenRouter」标签页打开总开关，选 `only` / `order` 与提供商 slug，按需设量化与归属头。改动即时生效，无需重启。
 6. **智能路由**（可选）—— 「智能路由 → 路由台」新建命名路由，加入多个目标、选策略、设权重；模型选择器里选「router / 路由名」使用，失败自动回退。
 7. **组合提供商**（可选）—— 选 2 个以上 provider 按并集 / 交集合并；选择器里以「composite / 组合名::模型」使用。
@@ -202,6 +205,26 @@ npm test            # host + client 冒烟测试
 页面写的是 `llm-pi-ai` 的配置：路由级 `reasoning` / `thinkingBudgets` / `compat`，逐模型 `reasoningEfforts`（`{ 档位: 线上取值 | null }`，`false` = 非推理，缺省 = 继承目录）。归一化刻意与 `resolveModelReasoning()` 的解析规则保持一致 —— 这些规则**不在 schema 里**（字典字段可选、`null` 合法），只在解析阶段报错，所以由本插件在写入前先拒绝，让页面上永远无法保存出一个 DSH 解析时会失败的配置。
 
 目录路由的逐模型改写走 `modelOverrides[id]` 而不是生成 `models` 列表：后者会**替换**整份已安装目录，把其余模型全部丢掉。
+
+### 档位如何出现在 DSH 聊天框的选择器里
+
+聊天输入框的模型选择器自带 **Effort** 一栏，它不是客户端写死的词表，而是**完全由 Host 提供的逐模型元数据**驱动：
+
+```text
+settings 文档（llm-pi-ai.providers.<route>.models[i].reasoningEfforts）
+  → llm-pi-ai 的 resolveModelReasoning()  →  pi-ai 模型的 reasoning + thinkingLevelMap
+  → PiAiAdapter.modelInfo() → reasoningInfo()   （!model.reasoning 时直接返回 {}）
+  → ctx.llm.resolveModelInfo() → session/modelCatalog
+  → 聊天框模型选择器的 Effort 一栏
+```
+
+由此有三条硬规则（本插件的界面与预览严格照此实现）：
+
+1. **只有逐模型 `reasoningEfforts` 会新增档位**；`model.reasoning` 为假（未声明 / `false`）时选择器完全不显示 Effort；
+2. **路由级 `reasoning` 只是默认选中项**：它不会新增档位，若模型并不支持这个等级，请求会被 `UNSUPPORTED_REASONING_EFFORT` 拒绝（所以手写模型必须声明档位）；
+3. **选项名是 DSH 自己的档位名**（档位 id 首字母大写），线上取值只影响真正发出的请求 —— `max: ultra` 在选择器里仍是 `Max`。
+
+写入走设置服务，因此每次保存都会发出 `settings/document-updated`，客户端目录随之刷新：**改完即生效，无需重启**（选择器需重新打开一次）。
 
 ### OpenRouter 的请求塑形
 
@@ -316,7 +339,7 @@ npm test            # tests/host.smoke.mjs + tests/client.smoke.mjs
 冒烟测试完全离线运行：
 
 - `tests/host.smoke.mjs` 在 `vm` 沙箱里加载 `dist/host.js`，用 DSH `0.2.0-rc.1` 形状的 settings mock（`describe()` + volatile 写入校验 + 私有键丢失）驱动全部 30 个方法，覆盖提供商 CRUD、禁用/还原、智能路由、组合、观测、**思考强度归一化**与 **OpenRouter 塑形（含真实 fetch 拦截）**。
-- `tests/client.smoke.mjs` 用极简 React 替身渲染客户端 bundle，断言座位注册、页面结构、两个新页签的交互路径与保存时发出的 RPC 载荷。
+- `tests/client.smoke.mjs` 用极简 React 替身渲染客户端 bundle，断言座位注册、页面结构、两个新页签的交互路径、聊天框 Effort 预览与保存时发出的 RPC 载荷。
 
 ---
 
@@ -328,6 +351,8 @@ npm test            # tests/host.smoke.mjs + tests/client.smoke.mjs
 | 安装报 `incompatible-version` | DSH 版本低于 `0.2.0-rc.1`，或 peer 范围被改坏；本插件只支持 `^0.2.0-rc.1`。 |
 | 卡片显示包名而不是显示名 / 没有图标 | 检查 `exports` 是否包含 `./locale/*.json`，`icon` 是否为包内**相对路径**且 ≤256 KiB。 |
 | 保存思考强度报「必须填写线上取值」 | 除 `off` 外的档位必须给出实际发送给网关的值；只想关闭思考请把该模型设为「非推理（false）」。 |
+| 聊天框的模型选择器里没有 Effort 一栏 | 该模型还没有声明档位：进入「思考强度 → 该模型 → 自定义档位」，勾选至少一个档位（只勾 `off` 不算）并保存 —— 只设路由级「默认等级」不会新增档位；也要确认选择器里当前选中的就是该模型（Effort 只针对当前选中的模型显示）。 |
+| 选择器里有档位，但请求被 `UNSUPPORTED_REASONING_EFFORT` 拒绝 | 路由级「默认等级」选了该模型不支持的档位（手写模型且未声明档位时尤其如此）；把默认等级改成选择器里存在的档位即可。 |
 | OpenRouter 改了没生效 | 总开关是否打开、提供商 slug 列表是否非空（或量化不为「不限制」）、请求主机是否在「生效主机」列表内；页面自检区会显示是否挂载、计数是否增长。 |
 | 请求里出现 `provider` 但字段不是预期的 | 本插件**合并**已有的 `provider` 对象：模型或自定义头里若已带 `provider`，同名键以页面配置为准覆盖。 |
 
@@ -335,7 +360,7 @@ npm test            # tests/host.smoke.mjs + tests/client.smoke.mjs
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **2.0.0**。
+见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **2.0.1**。
 
 ## 致谢与许可
 

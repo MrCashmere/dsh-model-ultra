@@ -1,4 +1,4 @@
-﻿/**
+/**
  * OpenRouterPanel — the "OpenRouter" tab.
  *
  * Ports the configuration surface of `dsh-openrouter-providers` v1.3.0 into this

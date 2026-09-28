@@ -262,6 +262,14 @@ export const CSS = [
   '.mpro-label{font-size:11.5px;color:var(--dsw-alias-label-secondary);font-weight:500}',
   '.mpro-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;white-space:nowrap}',
   '.mpro-inputNum{width:74px;flex:0 0 auto}',
+  // The four token budgets live in their own wrapping row: unlike `.mpro-hdrRow`
+  // (a fixed 170px/1fr/30px grid for one label + one input + one action), this row
+  // holds a checkbox plus four labelled number fields, so it must be flex with
+  // wrapping — a grid would push the extra inputs onto implicit tracks and let the
+  // last one spill out of the panel.
+  '.mpro-budgetRow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:10px}',
+  '.mpro-budgetField{display:inline-flex;align-items:center;gap:6px}',
+  '.mpro-budgetKey{font-size:11px;color:var(--dsw-alias-label-tertiary);font-family:var(--mpro-monospace);min-width:48px}',
   '.mpro-textarea{height:auto;min-height:110px;padding:8px 10px;line-height:1.55;resize:vertical}',
   '.mpro-thList{display:flex;flex-direction:column;gap:8px}',
   '.mpro-thCard{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}',
@@ -276,6 +284,14 @@ export const CSS = [
   '.mpro-thTable th{text-align:left;font-weight:500;font-size:11px;color:var(--dsw-alias-label-tertiary);padding:4px 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
   '.mpro-thTable td{padding:4px 6px;vertical-align:middle}',
   '.mpro-thTable td .mpro-input{height:28px}',
+  // How the draft will look in DSH's own chat model picker.
+  '.mpro-note{display:block;margin:0 0 12px;padding:9px 11px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-3);font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-secondary)}',
+  '.mpro-noteStrong{font-weight:600;color:var(--dsw-alias-label-primary)}',
+  '.mpro-pickerRow{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:7px 9px;border-radius:8px;border:1px dashed var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);font-size:11.5px;color:var(--dsw-alias-label-tertiary)}',
+  '.mpro-pickerLabel{font-weight:600;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+  '.mpro-pickerValue{font-family:var(--mpro-monospace);color:var(--dsw-alias-label-primary);word-break:break-word}',
+  '.mpro-pickerDefault{color:var(--dsw-alias-brand-primary);font-weight:600}',
+  '.mpro-chipWarn{background:var(--dsw-alias-state-warn-fill,var(--dsw-alias-state-warn-soft,rgba(217,119,6,.15)));color:var(--dsw-alias-state-warn-label,var(--dsw-alias-state-warn-primary));border-color:transparent}',
 
   // ---------- OpenRouter provider routing ----------
   '.mpro-orCard{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);padding:12px;display:flex;flex-direction:column;gap:10px}',

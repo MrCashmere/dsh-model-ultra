@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.1 — 2026-09-29
+
+**修复 token 预算输入框排版，并把「思考强度」与聊天框自带模型选择器的关系说清楚。**
+
+- fix(ui): 「思考强度」页的四个 token 预算输入框不再复用 `.mpro-hdrRow`（那是「标签 + 输入 + 按钮」的
+  3 列固定栅格），改用新的 `.mpro-budgetRow` 弹性换行行，每个预算都带 `minimal/low/medium/high` 标签；
+  此前多出的输入框会落到隐式栅格轨道上，间距被拉开、最后一个甚至溢出面板。
+- feat(thinking): 每个模型卡片新增「**聊天框 Effort 可选**」预览，直接显示保存后 DSH 聊天框模型选择器里
+  会出现哪些档位、默认选中哪一个；自定义但未勾选任何档位时提示「保存等于删除字段（回到继承）」。
+- feat(thinking): 手写模型（`models[i]`）没有声明档位、却设置了路由级「默认等级」时，卡片上出现「无档位」
+  告警并说明后果 —— 这种组合下选择器不显示 Effort，请求还会被 `UNSUPPORTED_REASONING_EFFORT` 拒绝。
+- docs: 页首说明与 README 增补档位如何从 `reasoningEfforts` 流到选择器（`resolveModelReasoning` →
+  `PiAiAdapter.modelInfo` → `session/modelCatalog` → Effort 一栏）、三条硬规则，以及「改完即生效、无需重启」。
+- test: 客户端冒烟新增大纲断言（说明区块、逐模型预览、无档位告警、预设提示）。
+
 ## 2.0.0 — 2026-09-29
 
 **重命名：`dsh-model-pro` → `dsh-model-ultra`（显示名「模型 Pro」→「模型 Ultra」）**

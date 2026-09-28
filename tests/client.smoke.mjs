@@ -474,6 +474,19 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   const selects = outT.filter((n) => String(n.className).includes('mpro-select'))
   assert(selects.length >= 3, `thinking tab renders the route-level selects, got ${selects.length}`)
   assert(outT.some((n) => String(n.className).includes('mpro-inputNum')), 'thinking tab renders budget number inputs')
+  // layout regression guard: the four budgets are a wrapping flex row of LABELLED
+  // fields — reusing `.mpro-hdrRow` (a fixed 3-track grid) pushed inputs onto
+  // implicit grid tracks and let the last one spill outside the panel.
+  // NB: two render passes land in `outT`, so count the UNIQUE node signatures.
+  const uniqBy = (nodes) => new Set(nodes.map((n) => `${n.tag}|${n.className}|${n.text}`))
+  const budgetRows = uniqBy(outT.filter((n) => String(n.className).includes('mpro-budgetRow')))
+  const budgetFields = uniqBy(outT.filter((n) => String(n.className).includes('mpro-budgetField')))
+  const budgetKeys = uniqBy(outT.filter((n) => String(n.className).includes('mpro-budgetKey')))
+  assert(budgetRows.size === 1, `budgets render in one dedicated row, got ${budgetRows.size}`)
+  assert(budgetFields.size === 4 && budgetKeys.size === 4,
+    `each budget keeps its own labelled field, got ${budgetFields.size} fields / ${budgetKeys.size} labels`)
+  assert(!outT.some((n) => String(n.className).includes('mpro-hdrRow')),
+    'the thinking tab does not reuse the 3-track header-row grid for the budgets')
   // per-model rows: one card per known model (explicit + catalog + overrides).
   // NB: every `out*` array receives two render passes (before/after the async
   // refresh), so exact counts are asserted on the UNIQUE node set.
@@ -483,6 +496,13 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   // the existing override is shown with its storage home (the test's `t` is the
   // identity function for non-badge keys, so the rendered copy is the KEY)
   assert(outT.some((n) => /thinkingStoreOverrides/.test(n.text || '')), 'override storage is labelled')
+  // The page must mirror DSH's own picker, not promise more than it shows: the
+  // rule is explained up front and every model previews its Effort rows.
+  assert(outT.some((n) => String(n.className).includes('mpro-note') && /thinkingPickerIntro/.test(n.text || '')),
+    'the panel explains how these settings surface in the chat picker')
+  const warnChips = new Set(outT.filter((n) => String(n.className).includes('mpro-chipWarn')).map((n) => n.text))
+  assert(warnChips.has('thinkingPickerWarnShort'),
+    'a hand-declared model with no levels is flagged (route default would be refused)')
   // expand the first model and check the custom-level editor: 7 level rows with a
   // free-text wire field each, plus preset chips (manual entry + presets).
   const toggle = outT.find((n) => String(n.className).includes('mpro-thToggle'))
@@ -490,11 +510,20 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   toggle.onClick()
   const outT2 = []
   renderAt(tree, fake, 'root', outT2)
+  // expanded card: the picker preview says what an inherited model shows, and the
+  // full warning explains the consequence.
+  assert(outT2.some((n) => String(n.className).includes('mpro-pickerRow') && /thinkingPickerInherit/.test(n.text || '')),
+    'the picker preview renders for an inherited model: ' + JSON.stringify(outT2.filter((n) => String(n.className).includes('mpro-pickerRow')).map((n) => n.text)))
+  assert(outT2.some((n) => /thinkingPickerWarnNoLevels/.test(n.text || '')),
+    'the expanded warning explains the UNSUPPORTED_REASONING_EFFORT risk')
   const customBtn = outT2.find((n) => n.tag === 'button' && /thinkingModeCustom/i.test(n.text || ''))
   assert(customBtn && typeof customBtn.onClick === 'function', 'custom-levels mode button present')
   customBtn.onClick()
   const outT3 = []
   renderAt(tree, fake, 'root', outT3)
+  assert(outT3.some((n) => String(n.className).includes('mpro-pickerRow') && /thinkingPickerNoRows/.test(n.text || '')),
+    'with no level enabled the preview warns that saving deletes the field')
+  assert(outT3.some((n) => /thinkingPresetHint/.test(n.text || '')), 'the preset hint explains it writes picker rows')
   const rows = outT3.filter((n) => n.tag === 'tr')
   assert(rows.length >= 8, `custom mode renders the 7-level table (header + rows), got ${rows.length}`)
   assert(outT3.some((n) => String(n.className).includes('mpro-thTable')), 'level table renders')
