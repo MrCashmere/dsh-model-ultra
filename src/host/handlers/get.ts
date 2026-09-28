@@ -74,6 +74,17 @@ export async function getProvider(ctx: HostCtx, args: { route?: string; includeS
     usesCatalog: !hasExplicit,
     availableModels,
     hasSecret,
+    // Thinking-effort state: the route's own defaults plus the per-model
+    // overrides a catalog route uses (see handlers/thinking.ts). `models`
+    // entries already carry their own `reasoningEfforts`/`compat` verbatim.
+    reasoning: (p as Record<string, unknown>).reasoning,
+    thinkingBudgets: (p as Record<string, unknown>).thinkingBudgets,
+    compat: (p as Record<string, unknown>).compat,
+    modelOverrides:
+      (p as Record<string, unknown>).modelOverrides !== null
+      && typeof (p as Record<string, unknown>).modelOverrides === 'object'
+        ? { ...((p as Record<string, unknown>).modelOverrides as Record<string, unknown>) }
+        : {},
     ...(secret !== undefined ? { secret } : {}),
   }
 }

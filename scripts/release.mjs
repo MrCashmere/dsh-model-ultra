@@ -70,7 +70,7 @@ run(`git push origin ${branch}`)
 run(`git push origin v${after}`)
 
 console.log(`\n\x1b[32m✓ 已发布 v${after}。GitHub Actions 正在构建并推送到 npm + 创建 Release。\x1b[0m`)
-console.log(`  跟踪进度：仓库 Actions 页，或 npm view dsh-model-pro version`)
+console.log(`  跟踪进度：仓库 Actions 页，或 npm view dsh-model-ultra version`)
 
 /**
  * Prepend a new "## <version> — <date>" section to CHANGELOG.md, its body built

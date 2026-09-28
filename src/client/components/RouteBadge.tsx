@@ -131,11 +131,12 @@ export function selectTurnSelection(owner: TurnTailOwnerLike): { from: number; t
  * identity churn. Returns '' when the snapshot can't answer (caller falls back
  * to the coarse window).
  *
- * Source of truth: `snapshot.chat.timeline.turns` — a Map<turnNo, {turn,
- * start:{time,seq}, end?:{time,seq}, status}> the conversation runtime keeps.
- * We also accept the derived `snapshot.chat.legacy.turnTimings` (turnNo ->
- * {startTime, endTime?}) and a top-level `turnTimings`, since which one is
- * populated varies by DSH build. Reading the WRONG path (an earlier bug) made
+ * Source of truth (dsh 0.2.0-rc.1): the CHAT view snapshot that the `useChat`
+ * seat hands us — `snapshot.timeline.turns` (a Map<turnNo, TurnLocation> where
+ * each location carries `start.time`) and the derived
+ * `snapshot.legacy.turnTimings` (turnNo -> {startTime, endTime?}). The older
+ * shape nested those under `snapshot.chat`; both are accepted, since which one
+ * is populated varies by DSH build. Reading the WRONG path (an earlier bug) made
  * this silently fall back to the ±slack coarse window every time, so the
  * overlap it was meant to remove never actually went away. */
 export function preciseWindowKey(snapshot: any, turnNo: number): string {
@@ -165,6 +166,8 @@ export function preciseWindowKey(snapshot: any, turnNo: number): string {
       }
     }
 
+    fromTurnsMap(snapshot.timeline && snapshot.timeline.turns)
+    fromTimings(snapshot.legacy && snapshot.legacy.turnTimings)
     if (chat) {
       fromTurnsMap(chat.timeline && chat.timeline.turns)
       fromTimings(chat.legacy && chat.legacy.turnTimings)
@@ -225,10 +228,22 @@ function routeLabel(route: string): string {
 
 /** The badge view. Renders nothing unless the pref is on AND this turn was
  * served through the smart router / a composite. */
-export function RouteBadgeView(props: any & { matched: { from: number; to: number; turn: number } | null; call: CallFn }) {
-  const { matched, call } = props
+export function RouteBadgeView(props: any & { matched?: { from: number; to: number; turn: number } | null; call: CallFn }) {
+  const { call } = props
+  // `conversation.chat.turnTail` is a LIST seat in DSH 0.2.0-rc.1: list seats
+  // take no `select`, so the framework never hands us `matched`. Derive the
+  // window from the owner Turn (the seat's owner props carry `turn`) — a chain
+  // seat's own `matched` still wins when a build does supply one.
+  const matched = props.matched ?? selectTurnSelection(props)
   const sessionId = props.sessionId as string | undefined
-  const useSession = typeof props.useSession === 'function' ? (props.useSession as (sel: (s: any) => any) => any) : undefined
+  // The seat's standard snapshot hook: DSH 0.2.0-rc.1 session seats expose
+  // `useChat` (the chat-view snapshot), which is where the turn timings live.
+  // `useSession` (an older/session-wide hook) is accepted as a fallback.
+  const snapshotHook = typeof props.useChat === 'function'
+    ? (props.useChat as (sel: (s: any) => any) => any)
+    : typeof props.useSession === 'function'
+      ? (props.useSession as (sel: (s: any) => any) => any)
+      : undefined
   const fallbackT = (k: string) => k
   const t = (props.t || fallbackT) as (k: string) => string
   const [state, setState] = React.useState<{ show: boolean; targets: ServingTarget[]; routes: Set<string> } | null>(null)
@@ -240,8 +255,11 @@ export function RouteBadgeView(props: any & { matched: { from: number; to: numbe
   // the boundary actually moves (e.g. a NEW turn starts after this one, which
   // finally closes this turn's open-ended window — exactly when a late log
   // could otherwise be misattributed).
-  const preciseKey: string = useSession && matched
-    ? useSession((snap: any) => preciseWindowKey(snap, matched.turn))
+  //
+  // The hook is ALWAYS called when the seat provides one (React hook order);
+  // whether it contributes a window is decided inside the selector.
+  const preciseKey: string = snapshotHook
+    ? snapshotHook((snap: any) => (matched ? preciseWindowKey(snap, matched.turn) : ''))
     : ''
 
   // Resolve the effective correlation window from precise key or coarse matched.
@@ -323,11 +341,12 @@ export function RouteBadgeView(props: any & { matched: { from: number; to: numbe
   )
 }
 
-/** Register the turnTail chain entry on the client slot registry. Fully
+/** Register the turnTail list entry on the client slot registry. Fully
  * defensive: a DSH build without this slot simply skips the feature.
  * `locale: CLIENT_NS` lets the framework inject a bound `t`; the caller ALSO
  * passes its own bound `t` via `explicitT`, which wins — either way the badge
- * never renders raw dictionary keys. */
+ * never renders raw dictionary keys. The per-turn gate is decided inside
+ * `RouteBadgeView` (list seats carry no `select`). */
 export function registerRouteBadge(slots: any, call: CallFn, explicitT?: (k: string) => string): void {
   if (!slots || typeof slots.inject !== 'function' || typeof slots.register !== 'function') return
   slots.inject('conversation.chat.turnTail', () => {
@@ -335,8 +354,7 @@ export function registerRouteBadge(slots: any, call: CallFn, explicitT?: (k: str
       return slots.register(
         {
           name: 'conversation.chat.turnTail',
-          id: 'dsh-model-pro-route-badge',
-          select: (owner: TurnTailOwnerLike) => selectTurnSelection(owner),
+          id: 'dsh-model-ultra-route-badge',
           locale: CLIENT_NS,
         },
         (componentProps: any) =>

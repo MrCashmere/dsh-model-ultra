@@ -1,7 +1,7 @@
-/** RPC call facade — routes kebab method names to the mounted `modelPro`
+/** RPC call facade — routes kebab method names to the mounted `modelUltra`
  * Typert Remote service. Static-bundle mode has no `host.call`; instead the
  * client mounts INVOCATIONS through the API Gateway and invokes
- * `remote.modelPro.<camelMethod>(args)`. The Gateway wraps the result in its
+ * `remote.modelUltra.<camelMethod>(args)`. The Gateway wraps the result in its
  * own `{ ok, value }` envelope; the business handlers wrap theirs in
  * `{ ok, ... }`. This facade unwraps both and preserves the previous
  * `call(method, payload) -> businessEnvelope` contract every component expects.

@@ -130,7 +130,7 @@ export function createHealthTracker(ctx: HostCtx): HealthTracker {
 
   const ctxAny = ctx as any
   if (typeof ctxAny.effect === 'function') {
-    ctxAny.effect(() => () => { void flush() }, 'dsh-model-pro: health flush')
+    ctxAny.effect(() => () => { void flush() }, 'dsh-model-ultra: health flush')
   }
   ;(api as any).flush = flush
   return api
@@ -142,7 +142,7 @@ let _tracker: HealthTracker | undefined
 export function getHealthTracker(ctx?: HostCtx): HealthTracker {
   if (!_tracker) {
     // Lazily bind on first use; a fresh ctx primes the initial snapshot.
-    _tracker = createHealthTracker((ctx || (globalThis as any).__dshModelProCtx) as HostCtx)
+    _tracker = createHealthTracker((ctx || (globalThis as any).__dshModelUltraCtx) as HostCtx)
   }
   return _tracker
 }
@@ -151,7 +151,7 @@ export function getHealthTracker(ctx?: HostCtx): HealthTracker {
 export function initHealthTracker(ctx: HostCtx): HealthTracker {
   if (_tracker) return _tracker
   _tracker = createHealthTracker(ctx)
-  ;(globalThis as any).__dshModelProCtx = ctx
+  ;(globalThis as any).__dshModelUltraCtx = ctx
   return _tracker
 }
 

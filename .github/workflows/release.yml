@@ -48,7 +48,7 @@ jobs:
       - name: Pack and verify tarball contains dist/
         run: |
           npm pack
-          TARBALL=$(ls dsh-model-pro-*.tgz)
+          TARBALL=$(ls dsh-model-ultra-*.tgz)
           echo "Tarball: $TARBALL"
           tar tzf "$TARBALL" | grep -q 'package/dist/host.js' || { echo "ERROR: dist/host.js not in tarball"; exit 1; }
           tar tzf "$TARBALL" | grep -q 'package/dist/client.js' || { echo "ERROR: dist/client.js not in tarball"; exit 1; }

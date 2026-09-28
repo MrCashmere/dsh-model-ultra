@@ -1,21 +1,47 @@
 /**
- * dsh-model-pro — Host half utilities.
+ * dsh-model-ultra — Host half utilities.
  *
- * makeHostPlain: rebuilds objects with Object.create(null) so they pass
- * the dsh-settings isPlainObject check across the vm sandbox realm boundary.
+ * makeHostPlain: rebuilds objects with Object.create(null) so they pass the
+ * dsh-settings isPlainObject check across a vm sandbox realm boundary (harmless
+ * in the static Desktop form, where the Host half runs in the ordinary Node
+ * process).
  *
- * readProviders / readDisabled / readProfile: helpers to read from the
- * llm-pi-ai settings section safely.
+ * Settings access, dsh 0.2.0-rc.1 contract:
+ *   - the settings service has NO `get(ns)`. `describe()` is the read surface,
+ *     and each row exposes `value` (the RESOLVED config, parsed by the owning
+ *     plugin's schema) and `user` (the raw profile-patch config, projected only
+ *     through the volatile FORM — dict nodes pass through untouched).
+ *     We read `user`: keys only this plugin keeps inside a provider profile
+ *     (`apiKeyEnc`, `disabled`, …) are dropped from `value` by llm-pi-ai's
+ *     profile schema.
+ *   - writes are validated against the entry's Config schema and only VOLATILE
+ *     paths are writable. `llm-pi-ai` declares exactly one volatile field
+ *     (`providers`), so this plugin's own state (disabledProviders, routes,
+ *     composites, routeStats, uiPrefs) lives in this plugin's OWN settings
+ *     entry (`dsh-model-ultra`, declared in cordis.patch.yml) under the schema in
+ *     ./config.ts.
  */
 
-import { NS, ROUTES_KEY } from '../shared/constants'
+import { NS, STATE_NS, DISABLED_KEY, ROUTES_KEY } from '../shared/constants'
+import { STATE_KEYS } from './config'
 import type { ProviderProfile, RoutesMap } from '../shared/types'
 
-/** Settings service interface (subset we use) */
+/** One settings entry as returned by `settings.describe()`. */
+export interface SettingsDescriptorRow {
+  ns: string
+  /** Resolved config, parsed by the entry's schema. */
+  value?: unknown
+  /** Raw profile-patch config, projected through the volatile form only. */
+  user?: unknown
+}
+
+/** Settings service interface (subset we use). */
 export interface SettingsService {
-  get(ns: string): Record<string, unknown> | undefined
   readonly writable: boolean
-  replace(ns: string, section: unknown): Promise<void>
+  describe(options?: { redactSecrets?: boolean }): SettingsDescriptorRow[]
+  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+  replace(ns: string, section: object, expectedRevision?: number): Promise<void>
+  configure?(presentation: { auto?: boolean }): () => void
 }
 
 /** LLM service interface (subset we use) */
@@ -36,6 +62,8 @@ export interface HostCtx {
   get(name: 'settings'): SettingsService | undefined
   get(name: 'llm'): LLMService | undefined
   get(name: string): unknown
+  /** Cordis logger service property (NOT a service name: `ctx.get('logger')` is undefined). */
+  logger?: { warn?: (...args: unknown[]) => void; info?: (...args: unknown[]) => void }
 }
 
 /**
@@ -64,24 +92,40 @@ export function makeHostPlain(obj: Record<string, unknown>): Record<string, null
   return out
 }
 
-/** Read the `providers` dict from the llm-pi-ai settings section. */
-export function readProviders(st: SettingsService | undefined): Record<string, ProviderProfile> {
+/** Read one settings entry's RAW operator config by namespace.
+ *
+ * 0.2.0-rc.1 exposes no `settings.get(ns)`; `describe()` is the read surface.
+ * `user` is the profile patch's own config (projected through the volatile form
+ * only, so dict values survive verbatim); `value` is the schema-parsed config
+ * and therefore drops keys the owning plugin's schema does not declare. */
+export function readSection(st: SettingsService | undefined, ns: string): Record<string, unknown> {
   if (st === undefined) return {}
   try {
-    const section = st.get(NS)
-    if (section && typeof section === 'object' && (section as any).providers && typeof (section as any).providers === 'object')
-      return (section as any).providers as Record<string, ProviderProfile>
+    const rows = st.describe()
+    if (!Array.isArray(rows)) return {}
+    const row = rows.find((r) => r && r.ns === ns)
+    const user = row?.user
+    if (user && typeof user === 'object' && !Array.isArray(user)) return user as Record<string, unknown>
   } catch { /* ignore */ }
   return {}
 }
 
-/** Read the `disabledProviders` dict from the llm-pi-ai settings section. */
-export function readDisabled(st: SettingsService | undefined): Record<string, ProviderProfile> {
-  if (st === undefined) return {}
+/** Read the `providers` dict from the llm-pi-ai settings section. */
+export function readProviders(st: SettingsService | undefined): Record<string, ProviderProfile> {
   try {
-    const section = st.get(NS)
-    if (section && typeof section === 'object' && (section as any).disabledProviders && typeof (section as any).disabledProviders === 'object')
-      return (section as any).disabledProviders as Record<string, ProviderProfile>
+    const providers = readSection(st, NS).providers
+    if (providers && typeof providers === 'object' && !Array.isArray(providers))
+      return providers as Record<string, ProviderProfile>
+  } catch { /* ignore */ }
+  return {}
+}
+
+/** Read the `disabledProviders` dict from this plugin's own settings section. */
+export function readDisabled(st: SettingsService | undefined): Record<string, ProviderProfile> {
+  try {
+    const disabled = readSection(st, STATE_NS)[DISABLED_KEY]
+    if (disabled && typeof disabled === 'object' && !Array.isArray(disabled))
+      return disabled as Record<string, ProviderProfile>
   } catch { /* ignore */ }
   return {}
 }
@@ -96,62 +140,57 @@ export function readProfile(
   return p
 }
 
-/** Read the smart-routing alias table from the llm-pi-ai section.
+/** Read the smart-routing alias table from this plugin's settings section.
  * Returns a SHALLOW COPY: the resolved settings object is deep-frozen (so
  * `delete`/assigment on it throws in strict mode — "Cannot delete property"),
  * and callers may restructure the map in place before writing it back. */
 export function readRoutes(st: SettingsService | undefined): RoutesMap {
-  if (st === undefined) return {}
   try {
-    const section = st.get(NS) as Record<string, unknown> | undefined
-    const r = section && section[ROUTES_KEY]
+    const r = readSection(st, STATE_NS)[ROUTES_KEY]
     if (r && typeof r === 'object') return { ...(r as RoutesMap) }
   } catch { /* ignore */ }
   return {}
 }
 
-/** Write the smart-routing alias table, preserving every other section key. */
+/** Write the smart-routing alias table, preserving every other state key. */
 export async function writeRoutes(st: SettingsService, routes: RoutesMap): Promise<void> {
-  const preserved: Record<string, unknown> = {}
-  try {
-    const section = st.get(NS) as Record<string, unknown> | undefined
-    if (section && typeof section === 'object') {
-      for (const k of Object.keys(section)) {
-        if (k === ROUTES_KEY) continue
-        preserved[k] = section[k]
-      }
-    }
-  } catch { /* nothing to preserve */ }
-  await st.replace(NS, makeHostPlain({ ...preserved, routes }) as any)
+  await writeRoutesRootKey(st, ROUTES_KEY, routes)
 }
 
-/** Read an arbitrary top-level key from the llm-pi-ai section (foreign-key
- * accessor — e.g. composites / routeStats), returning a plain copy. */
+/** Read an arbitrary key from this plugin's settings section (e.g. composites /
+ * routeStats / uiPrefs), returning a plain copy. */
 export function readRoutesRootKey(st: SettingsService | undefined, key: string): unknown {
-  if (st === undefined) return undefined
   try {
-    const section = st.get(NS) as Record<string, unknown> | undefined
-    const v = section && section[key]
+    const v = readSection(st, STATE_NS)[key]
     if (v && typeof v === 'object') return { ...(v as Record<string, unknown>) }
     return v
   } catch { /* ignore */ }
   return undefined
 }
 
-/** Write a top-level key in the llm-pi-ai section, preserving every other key. */
+/**
+ * Write one snapshot key into this plugin's own settings section, preserving
+ * the other state keys.
+ *
+ * `settings.replace()` resets every VOLATILE field of the entry before merging,
+ * so the snapshot handed to it must carry ALL of the entry's volatile fields.
+ * We therefore read-modify-write the complete state on every update.
+ */
 export async function writeRoutesRootKey(st: SettingsService | undefined, key: string, value: unknown): Promise<void> {
   if (st === undefined) return
-  const preserved: Record<string, unknown> = {}
-  try {
-    const section = st.get(NS) as Record<string, unknown> | undefined
-    if (section && typeof section === 'object') {
-      for (const k of Object.keys(section)) {
-        if (k === key) continue
-        preserved[k] = section[k]
-      }
-    }
-  } catch { /* nothing to preserve */ }
-  await st.replace(NS, makeHostPlain({ ...preserved, [key]: value }) as any)
+  await writeState(st, { [key]: value })
+}
+
+/** Read-modify-write of this plugin's full state snapshot. */
+async function writeState(st: SettingsService, patch: Record<string, unknown>): Promise<void> {
+  const current = readSection(st, STATE_NS)
+  const next: Record<string, unknown> = {}
+  for (const key of STATE_KEYS) {
+    const value = Object.prototype.hasOwnProperty.call(patch, key) ? patch[key] : current[key]
+    if (value === undefined) continue
+    next[key] = value
+  }
+  await st.replace(STATE_NS, makeHostPlain(next) as any)
 }
 
 /** The wire model id for a provider/model: `requestModel` when the provider's
@@ -182,30 +221,42 @@ export function checkWritable(st: SettingsService | undefined): boolean {
 }
 
 /**
- * Write both provider dicts to the `llm-pi-ai` settings section, PRESERVING
- * every other top-level key (schema-foreign keys that only this plugin or the
- * operator keep at section level) — `settings.replace()` replaces the whole
- * section, so a wholesale rewrite would silently drop them.
+ * Persist the provider dicts: `providers` into the `llm-pi-ai` section (the only
+ * volatile field that schema declares) and `disabledProviders` into this
+ * plugin's own section.
  *
- * This is the only write path — every handler that modifies state calls this.
+ * Ordering is add-before-remove: a profile that is moving between the two dicts
+ * must land in its new home before it leaves the old one, so a failed write can
+ * never lose a profile (it only leaves a stale duplicate).
+ *
+ * This is the only write path — every handler that modifies provider state
+ * calls this.
  */
 export async function writeSection(
   st: SettingsService,
   providers: Record<string, ProviderProfile>,
   disabled: Record<string, ProviderProfile>,
 ): Promise<void> {
-  const preserved: Record<string, unknown> = {}
-  try {
-    const section = st.get(NS) as Record<string, unknown> | undefined
-    if (section && typeof section === 'object') {
-      for (const k of Object.keys(section)) {
-        if (k === 'providers' || k === 'disabledProviders') continue
-        preserved[k] = section[k]
-      }
-    }
-  } catch { /* nothing to preserve */ }
+  const currentProviders = readProviders(st)
+  const currentDisabled = readDisabled(st)
 
-  await st.replace(NS, makeHostPlain({ ...preserved, providers, disabledProviders: disabled }) as any)
+  const writeProviders = async () => {
+    await st.replace(NS, makeHostPlain({ providers }) as any)
+  }
+  const writeDisabled = async () => {
+    await writeState(st, { [DISABLED_KEY]: disabled })
+  }
+
+  const gainsProvider = Object.keys(providers).some((k) => !Object.prototype.hasOwnProperty.call(currentProviders, k))
+  const gainsDisabled = Object.keys(disabled).some((k) => !Object.prototype.hasOwnProperty.call(currentDisabled, k))
+
+  if (gainsDisabled && !gainsProvider) {
+    await writeDisabled()
+    await writeProviders()
+  } else {
+    await writeProviders()
+    await writeDisabled()
+  }
 }
 
 /**

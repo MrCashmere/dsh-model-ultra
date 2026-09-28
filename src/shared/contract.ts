@@ -1,5 +1,5 @@
 /**
- * dsh-model-pro wire contract (static-bundle mode).
+ * dsh-model-ultra wire contract (static-bundle mode).
  *
  * Static-mounted DSH plugins (installed via `dsh plugin add`) do NOT get the
  * dynamic-plugin `harness.handle` / `host.call` bridge. Host↔Client RPC instead
@@ -15,10 +15,10 @@
  */
 
 /** Typert Remote service key (also the wire namespace + client reflect key). */
-export const SERVICE_KEY = 'modelPro'
+export const SERVICE_KEY = 'modelUltra'
 
 /** Plugin/package id — must match the loader entry id and client bundle id. */
-export const PACKAGE = 'dsh-model-pro'
+export const PACKAGE = 'dsh-model-ultra'
 
 /**
  * Every RPC method, as [wireMethod (kebab, used by the client call() facade),
@@ -51,6 +51,11 @@ export const METHODS: ReadonlyArray<readonly [string, string]> = [
   ['probe-all', 'probeAll'],
   ['get-ui-prefs', 'getUiPrefs'],
   ['set-ui-prefs', 'setUiPrefs'],
+  ['set-thinking', 'setThinking'],
+  ['get-openrouter', 'getOpenRouter'],
+  ['set-openrouter', 'setOpenRouter'],
+  ['import-openrouter', 'importOpenRouter'],
+  ['openrouter-selftest', 'openRouterSelfTest'],
 ] as const
 
 /** Client-facade kebab → camel map. */
@@ -78,7 +83,11 @@ const argParam = {
   name: 'args',
   wire: 'args',
   source: 'json' as const,
-  codec: { mode: 'strict' as const, typeSymbol: `${PACKAGE}#Args`, schema: argsSchema },
+  // 0.2.0-rc.1 strict codecs carry a `create()` FACTORY, not a `schema` value:
+  // typert validates `typeof codec.create === 'function'` and the boundary calls
+  // `codec.create().parse(value)`. A `schema` key is ignored and registration
+  // fails with "strict codec has no create() factory".
+  codec: { mode: 'strict' as const, typeSymbol: `${PACKAGE}#Args`, create: () => argsSchema },
 }
 
 /** Strict invocation descriptors — what the client mounts and the host resolves. */
@@ -92,7 +101,7 @@ export const INVOCATIONS = METHODS.map(([, method]) => ({
   result: {
     mode: 'strict' as const,
     typeSymbol: `${PACKAGE}#${method}Result`,
-    schema: resultEnvelopeSchema,
+    create: () => resultEnvelopeSchema,
   },
 }))
 
@@ -105,9 +114,9 @@ export const TYPERT_MANIFEST = {
     services: [
       {
         key: SERVICE_KEY,
-        exportName: 'ModelProRuntime',
+        exportName: 'ModelUltraRuntime',
         description:
-          'Model Pro — llm-pi-ai provider lifecycle, smart routing, composites, observability and connectivity tests.',
+          'Model Ultra — llm-pi-ai provider lifecycle, smart routing, composites, observability and connectivity tests.',
         tags: [],
         members: METHODS.map(([, method]) => ({
           kind: 'method' as const,

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "模型 Ultra",
+    "description": "在设置面板中管理 llm-pi-ai 提供商、自定义请求头、逐模型思考强度、OpenRouter 提供商路由/归属头、智能路由与逐模型连通性测试。"
+  }
+}

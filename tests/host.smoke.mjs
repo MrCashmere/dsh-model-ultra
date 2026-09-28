@@ -3,7 +3,8 @@
  *
  * Loads the REAL built `dist/host.js` into a vm sandbox (the same way the
  * dsh-cordis-host-runner evaluates it: wrapped in an async function), with
- * realistic mocks for the `settings` service (persist-on-replace), the `llm`
+ * realistic mocks for the `settings` service (dsh 0.2.0-rc.1 shape: no get(),
+ * describe() + schema-validated replace(), volatile-only writes), the `llm`
  * service (listConfigurableProviders / discoverModels / listModels /
  * prepareCall+stream), and the sandboxed `ctx` (get / effect). Then exercises
  * every RPC handler and the unload-restore safety net, asserting each step.
@@ -20,45 +21,102 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const HOST_BUNDLE = path.join(__dirname, '..', 'dist', 'host.js')
 
 // ---------------------------------------------------------------------------
-// mock settings service — mimics dsh-settings: get() returns the resolved
-// section, replace() persists it (null-proto objects from makeHostPlain are
-// JSON-safe and stored directly).
+// mock settings service — mimics dsh-settings on dsh 0.2.0-rc.1:
+//   - there is NO get(ns). describe() exposes each entry with `value` (the
+//     RESOLVED, schema-parsed config) and `user` (the raw profile-patch config).
+//   - replace(ns, section) is validated against the entry's Config: only
+//     VOLATILE paths are writable. `llm-pi-ai` declares exactly one volatile
+//     field (`providers`); the plugin's own entry (STATE_NS) declares the five
+//     state keys. Writing a foreign key into `llm-pi-ai` throws, exactly like
+//     the real service ("Config field \"...\" is not volatile").
+//   - keys already present in a section's raw config survive a write (the real
+//     service strips only volatile fields before merging).
+// `value` for `llm-pi-ai` deliberately DROPS provider-profile fields pi-ai's
+// schema does not declare (apiKeyEnc/disabled/...) — reading `value` instead of
+// `user` would silently lose them, which is the regression this mock guards.
 // ---------------------------------------------------------------------------
-function createSettings(initialDocument) {
-  let doc = structuredClone(initialDocument)
+const NS = 'llm-pi-ai'
+const STATE_NS = 'dsh-model-ultra'
+const STATE_KEYS = ['disabledProviders', 'routes', 'composites', 'routeStats', 'uiPrefs', 'openrouter']
+/** Fields llm-pi-ai's provider-profile schema declares (see its config.ts). */
+const PROFILE_FIELDS = new Set([
+  'apiKeyEnv', 'displayName', 'api', 'baseURL', 'models', 'modelOverrides', 'compat',
+  'defaultContextWindow', 'defaultMaxTokens', 'defaultInput', 'headers', 'reasoning',
+  'thinkingBudgets', 'cacheRetention', 'transport', 'timeoutMs', 'websocketConnectTimeoutMs',
+  'streamIdleTimeoutMs', 'maxRequestImageBytes', 'requestImagePixelBudget', 'requestImageMaxBytes',
+  'retryPolicy',
+])
+
+function parseProviders(providers) {
+  return Object.fromEntries(Object.entries(providers || {}).map(([route, profile]) => [
+    route,
+    Object.fromEntries(Object.entries(profile || {}).filter(([field]) => PROFILE_FIELDS.has(field))),
+  ]))
+}
+
+function createSettings(initialSection = {}) {
+  const holder = { section: structuredClone(initialSection), state: {} }
   return {
-    doc: () => doc,
-    get: (ns) => (ns === 'llm-pi-ai' ? doc : undefined),
-    writable: true,
+    /** Merged view of both sections (llm-pi-ai + this plugin's own state). */
+    doc: () => ({ ...holder.section, ...holder.state }),
+    /** The llm-pi-ai section alone. */
+    section: () => holder.section,
+    /** This plugin's own settings section alone. */
+    state: () => holder.state,
+    get writable() { return true },
+    describe: () => [
+      {
+        ns: NS,
+        user: structuredClone(holder.section),
+        value: { ...structuredClone(holder.section), providers: parseProviders(holder.section.providers) },
+      },
+      { ns: STATE_NS, user: structuredClone(holder.state), value: structuredClone(holder.state) },
+    ],
     replace: async (ns, section) => {
-      if (ns !== 'llm-pi-ai') throw new Error('unexpected ns')
-      doc = section
+      const input = JSON.parse(JSON.stringify(section))
+      if (ns === NS) {
+        for (const key of Object.keys(input)) {
+          if (key !== 'providers') throw new Error(`Config field "${key}" is not volatile`)
+        }
+        holder.section = { ...holder.section, providers: input.providers || {} }
+        return
+      }
+      if (ns === STATE_NS) {
+        for (const key of Object.keys(input)) {
+          if (!STATE_KEYS.includes(key)) throw new Error(`Config field "${key}" is not volatile`)
+        }
+        // replace() resets every volatile field of the entry before merging, so
+        // the input IS the stored snapshot: omitted keys are dropped.
+        holder.state = input
+        return
+      }
+      throw new Error(`No configurable plugin entry "${ns}"`)
     },
   }
 }
 
 /**
- * A settings wrapper that models the REAL dsh-settings timing: the namespace's
- * resolved value is `undefined` until the owning plugin (llm-pi-ai) registers
- * its section, then becomes live. This is the reinstall race — model-pro may
+ * A settings wrapper that models the REAL dsh-settings timing: the `llm-pi-ai`
+ * row is absent from describe() until the owning plugin (llm-pi-ai) registers
+ * its section, then it appears. This is the reinstall race — model-pro may
  * apply BEFORE pi-ai, read nothing, and (before the fix) silently skip the
  * re-park of disabled-marked providers sitting in `providers`.
  */
 function createLateSettings(store) {
   let registered = false
-  const fire = (ns) => { for (const fn of listeners['settings/updated'] || []) try { fn(ns, 1) } catch { /* ignore */ } }
+  const fire = (ns) => { for (const fn of listeners['settings/document-updated'] || []) try { fn(ns, 1) } catch { /* ignore */ } }
   return {
     get registered() { return registered },
     register: () => {
       registered = true
-      // Commit fires settings/updated for the namespace, like dsh-settings.
+      // Commit fires the document-updated event for the namespace, like dsh-settings.
       queueMicrotask(() => fire('llm-pi-ai'))
     },
-    get: (ns) => {
-      if (ns === 'llm-pi-ai' && !registered) return undefined
-      return store.get(ns)
-    },
     get writable() { return store.writable },
+    doc: () => store.doc(),
+    section: () => store.section(),
+    state: () => store.state(),
+    describe: () => store.describe().filter((row) => registered || row.ns !== NS),
     replace: (ns, section) => store.replace(ns, section),
   }
 }
@@ -130,35 +188,69 @@ function createLlm(log = []) {
 //
 // Static-bundle mode: dist/host.js is an ESM module that imports
 // TypertRemoteService and exports apply/name/inject. The RPC surface is the
-// ModelProRuntime service instance created inside apply(). We evaluate the
+// ModelUltraRuntime service instance created inside apply(). We evaluate the
 // bundle in a vm with a stub TypertRemoteService that captures the instance,
 // then invoke its camelCase methods (kebab RPC names map to camel via the
 // same rule the contract uses).
 // ---------------------------------------------------------------------------
 const kebabToCamel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
 
+/** Every call the sandbox's `fetch` received (the OpenRouter shaper wraps it). */
+const fetchCalls = []
+
 async function loadHost() {
   let code = readFileSync(HOST_BUNDLE, 'utf8')
   // Strip the ESM import (stubbed below) and the trailing `export { ... }`.
   code = code.replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']@deepseek-ai\/dsh-typert-protocol["'];?/m, '')
+  // The plugin's own settings schema is the real schemastery (the runtime
+  // supplies it); bind it to the sandbox global of the same name.
+  code = code.replace(/^\s*import\s+z\s+from\s+["']@deepseek-ai\/schemastery["'];?/m, 'var z = globalThis.__schemastery;')
+  // Node builtins (`node:fs/promises`, `node:os`, `node:path` — the legacy
+  // import probes) are bound from the sandbox's real module namespace.
+  code = code.replace(
+    /^\s*import\s+\{([^}]*)\}\s+from\s+["'](node:[^"']+)["'];?$/gm,
+    (_m, names, spec) => `const {${names}} = globalThis.__node[${JSON.stringify(spec)}];`,
+  )
   code = code.replace(/export\s*\{[\s\S]*?\};?\s*$/m, '')
 
   const captured = []
   const sandbox = {
     console, setTimeout, clearTimeout, Date, Promise, AbortController,
     TextEncoder, TextDecoder,
+    process: { env: process.env },
+    URL,
     // stub base: capture each runtime instance so the test can invoke methods
     TypertRemoteService: class {
       constructor(ctx) { this.ctx = ctx; captured.push(this) }
     },
   }
   sandbox.globalThis = sandbox
+  sandbox.__schemastery = (await import('@deepseek-ai/schemastery')).default
+  sandbox.__node = {
+    'node:fs/promises': await import('node:fs/promises'),
+    'node:os': await import('node:os'),
+    'node:path': await import('node:path'),
+  }
+  // Recording fetch stub: the plugin's OpenRouter shaper wraps whatever global
+  // `fetch` is installed when `apply` runs, so this captures the shaped calls.
+  sandbox.fetch = async (input, init) => {
+    fetchCalls.push({ input, init })
+    return { ok: true, status: 200, headers: { get: () => null }, async text() { return 'ok' } }
+  }
+  const stubFetch = sandbox.fetch
   const result = await vm.runInContext(
-    `(async () => { ${code}\n; return { apply, name, inject }; })()`,
+    `(async () => { ${code}\n; return { apply, name, inject, Config }; })()`,
     vm.createContext(sandbox),
     { filename: 'model-pro-host.js' },
   )
-  return { apply: result.apply, runtimes: captured }
+  return {
+    apply: result.apply,
+    runtimes: captured,
+    Config: result.Config,
+    schemastery: sandbox.__schemastery,
+    sandbox,
+    stubFetch,
+  }
 }
 
 function assert(cond, msg) {
@@ -176,12 +268,14 @@ const creds = {
 }
 
 // ---------------------------------------------------------------------------
-const store = createSettings({ providers: {}, disabledProviders: {}, sectionNote: { hello: 1 } })
+const store = createSettings({ providers: {}, sectionNote: { hello: 1 } })
 const log = { section: () => store.doc() }
 const llm = createLlm(log)
 const cleanups = []
 const listeners = {}
 const timerCallbacks = []
+/** Manifests handed to ctx.typert.register, for contract-shape assertions. */
+const typertManifests = []
 const ctx = {
   get: (name) => (
     name === 'settings' ? store
@@ -194,19 +288,75 @@ const ctx = {
             : undefined
   ),
   // Typert registry stub: apply() registers its manifest through this.
-  typert: { register: () => () => {} },
+  typert: { register: (manifest) => { typertManifests.push(manifest); return () => {} } },
   on: (name, fn) => { (listeners[name] = listeners[name] || []).push(fn); return () => {} },
   effect: (fn) => { const c = fn(); if (typeof c === 'function') cleanups.push(c) },
 }
 /** Fire every registered interval callback once (deterministic flush). */
 const tick = async () => { for (const fn of timerCallbacks) { try { await fn() } catch { /* ignore */ } } }
-const { apply, runtimes } = await loadHost()
+const { apply, runtimes, Config, schemastery, sandbox, stubFetch } = await loadHost()
 apply(ctx)
 
-// The RPC surface is the captured ModelProRuntime instance. Drive it by the
-// same kebab method names the client uses; each maps to a camelCase method.
+// --- this plugin's own settings schema (dsh 0.2.0-rc.1) --------------------
+// dsh validates every settings write against the entry's Config and only
+// VOLATILE paths are writable, so the plugin's own state must live in a schema
+// that declares it volatile. `llm-pi-ai` declares only `providers`.
+{
+  assert(Config && Config.type === 'object', 'plugin Config is an object schema')
+  for (const key of STATE_KEYS) {
+    const field = Config.dict && Config.dict[key]
+    assert(field !== undefined, `plugin Config declares ${key}`)
+    // dsh's isVolatilePath() walks schema.dict and accepts a path exactly when
+    // its node (or an ancestor) carries meta.volatile.
+    assert(field.meta && field.meta.volatile === true, `plugin Config field ${key} is volatile (settings write requirement)`)
+  }
+  assert(typeof schemastery === 'function' || typeof schemastery === 'object', 'real schemastery bound in the sandbox')
+}
+
+// --- typert manifest shape (dsh 0.2.0-rc.1) --------------------------------
+// The registry validates strict codecs with `typeof codec.create === 'function'`
+// and then calls `codec.create().parse(value)`. A `schema:`-only codec (the
+// pre-0.2.0 shape) throws "strict codec has no create() factory" during
+// registration, so this assertion is the regression guard for the port.
+assert(typertManifests.length === 1, 'typert manifest registered exactly once')
+{
+  const manifest = typertManifests[0]
+  assert(manifest.package === 'dsh-model-ultra' && manifest.face === 'host', 'manifest package/face')
+  assert(Array.isArray(manifest.invocations) && manifest.invocations.length === 30, 'manifest carries 30 invocations')
+  for (const descriptor of manifest.invocations) {
+    const codecs = [descriptor.result, ...descriptor.parameters.map((p) => p.codec)]
+    for (const codec of codecs) {
+      assert(codec.mode === 'strict', `${descriptor.id}: strict codec mode`)
+      assert(typeof codec.typeSymbol === 'string' && codec.typeSymbol.length > 0, `${descriptor.id}: typeSymbol`)
+      assert(typeof codec.create === 'function', `${descriptor.id}: codec.create() factory (0.2.0-rc.1 requirement)`)
+      assert(!Object.hasOwn(codec, 'schema'), `${descriptor.id}: no legacy \`schema\` field`)
+      const parsed = codec.create()
+      assert(parsed && typeof parsed.parse === 'function', `${descriptor.id}: create() returns a { parse } schema`)
+    }
+  }
+  const service = manifest.model.services[0]
+  assert(service.key === 'modelUltra' && service.exportName === 'ModelUltraRuntime', 'model service row')
+  assert(service.members.length === 30, 'all 30 methods declared as members')
+}
+
+// The RPC surface is the captured ModelUltraRuntime instance. Drive it by the
+// same kebab invocation ids the client uses: the manifest declares the exact
+// camelCase member each id resolves to, so the test never has to re-derive the
+// name transformation (`get-openrouter` → `getOpenRouter`, not `getOpenrouter`).
 const runtime = () => runtimes[runtimes.length - 1]
-const P = async (name, args) => runtime()[kebabToCamel(name)](args || {})
+// The manifest carries the camelCase member name each invocation resolves to
+// (`dsh-model-ultra#modelUltra/getOpenRouter`). Key it by its separator-free
+// lowercase form so a kebab invocation id (`get-openrouter`) finds it — the
+// authoritative kebab→camel table lives in the contract the CLIENT imports.
+const METHODS_BY_ID = new Map(
+  typertManifests[0].invocations.map((d) => [d.method.replace(/-/g, '').toLowerCase(), d.method]),
+)
+const P = async (name, args) => {
+  const method = METHODS_BY_ID.get(name.replace(/-/g, '').toLowerCase())
+  assert(typeof method === 'string', `unknown invocation "${name}"`)
+  assert(typeof runtime()[method] === 'function', `service exposes ${method}()`)
+  return runtime()[method](args || {})
+}
 const provs = () => store.doc().providers || {}
 const dis = () => store.doc().disabledProviders || {}
 
@@ -388,17 +538,16 @@ assert(r.providers.find((x) => x.route === 'flag-gw').disabled === true, 'reinst
 
 // --- reinstall with pi-ai loading AFTER model-pro: the section is not
 // resolvable at apply time, so the eager park reads nothing. The
-// `settings/updated` re-park must catch the markers the moment the namespace
-// commits — otherwise llm-pi-ai's resolveProfiles (which ignores the marker)
-// registers them as ACTIVE routes and disabled models resurface. ---
+// `settings/document-updated` re-park must catch the markers the moment the
+// namespace commits — otherwise llm-pi-ai's resolveProfiles (which ignores the
+// marker) registers them as ACTIVE routes and disabled models resurface. ---
 {
   const lateStore = createSettings({
     providers: { lateGw: { baseURL: 'https://late/v1', disabled: true } },
-    disabledProviders: {},
     noteK: 1,
   })
   const late = createLateSettings(lateStore)
-  listeners['settings/updated'] = []
+  listeners['settings/document-updated'] = []
   const lateCtx = {
     get: (name) => (name === 'settings' ? late : name === 'llm' ? llm : name === 'credentials' ? creds : undefined),
     typert: { register: () => () => {} },
@@ -414,14 +563,14 @@ assert(r.providers.find((x) => x.route === 'flag-gw').disabled === true, 'reinst
     'marked provider still sits in providers before pi-ai loads',
   )
 
-  // Now pi-ai registers its namespace and commits -> settings/updated fires.
+  // Now pi-ai registers its namespace and commits -> document-updated fires.
   await Promise.resolve()
   late.register()
   await new Promise((res) => setTimeout(res, 5))
 
   assert(
     Object.hasOwn(lateDoc().disabledProviders || {}, 'lateGw') && lateDoc().disabledProviders.lateGw.disabled === true,
-    'settings/updated re-park parks the marked provider once the namespace commits',
+    'settings/document-updated re-park parks the marked provider once the namespace commits',
   )
   assert(!Object.hasOwn(lateDoc().providers || {}, 'lateGw'), 'parked provider removed from providers after late registration')
   assert(lateDoc().noteK === 1, 'foreign section keys survive the late re-park write')
@@ -429,7 +578,7 @@ assert(r.providers.find((x) => x.route === 'flag-gw').disabled === true, 'reinst
   // Restore shared harness state: drop the second runtime + the listeners it
   // registered, so the following tests keep driving the ORIGINAL instance.
   runtimes.pop()
-  listeners['settings/updated'] = []
+  listeners['settings/document-updated'] = []
 }
 
 // enable: clears the marker and returns it to providers
@@ -857,14 +1006,16 @@ await P('set-route', { alias: 'auto-camel', strategy: 'priority', targets: [{ pr
   assert((lg2.entries || []).some((e) => e.route === 'auto-camel'), 're-applied fiber re-hydrates request-log tail')
 }
 
-// --- ui prefs: badge toggle persists under llm-pi-ai[uiPrefs] and merges ---
+// --- ui prefs: badge toggle persists in THIS PLUGIN's own settings section
+// (never in llm-pi-ai, whose schema only accepts `providers`) and merges ---
 r = await P('get-ui-prefs')
 assert(r.ok && r.prefs && r.prefs.showRouteBadge === true, 'ui prefs default to showRouteBadge=true: ' + JSON.stringify(r))
 r = await P('set-ui-prefs', { prefs: { showRouteBadge: false } })
 assert(r.ok && r.prefs.showRouteBadge === false, 'set-ui-prefs flips the badge off')
 r = await P('get-ui-prefs')
 assert(r.prefs.showRouteBadge === false, 'get-ui-prefs reflects the saved value')
-assert(log.section().uiPrefs && typeof log.section().uiPrefs === 'object', 'uiPrefs persisted as a section foreign key: ' + JSON.stringify(Object.keys(log.section())))
+assert(store.state().uiPrefs && typeof store.state().uiPrefs === 'object', 'uiPrefs persisted in the plugin state section: ' + JSON.stringify(Object.keys(store.state())))
+assert(store.section().uiPrefs === undefined, 'uiPrefs was NOT written into the llm-pi-ai section')
 r = await P('list-routes')
 assert(r.ok && r.routes && Object.keys(r.routes).length >= 1, 'uiPrefs write preserved sibling keys (routes intact)')
 r = await P('set-ui-prefs', { prefs: { showRouteBadge: true } })
@@ -891,9 +1042,261 @@ await P('delete-composite', { name: 'common' })
 await P('delete-provider', { route: 'comp-a' })
 await P('delete-provider', { route: 'comp-b' })
 
-// --- FINAL: uninstall while the settings/updated re-park listener is live ---
+// --- thinking effort: route defaults, per-model entries, catalog overrides ---
+{
+  // Seed the section directly: one provider with an explicit `models` list, one
+  // catalog-style route (no list), and `deepseek` (the mock's llm.listModels
+  // serves it a 2-model catalog, which is what guards typo'd overrides).
+  const seed = {
+    ...provs(),
+    'think-gw': { api: 'openai-completions', baseURL: 'https://think/v1', models: [{ id: 'm1' }, { id: 'm2' }] },
+    'openrouter': { api: 'openai-completions', baseURL: 'https://openrouter.ai/api/v1' },
+    'deepseek': { api: 'openai-responses', baseURL: 'https://api.deepseek.com' },
+  }
+  await store.replace(NS, { providers: seed })
+
+  r = await P('set-thinking', {
+    route: 'think-gw',
+    patch: {
+      reasoning: 'high',
+      thinkingBudgets: { minimal: 128, low: 512, medium: 2048, high: 8192 },
+      compat: { thinkingFormat: 'openrouter', supportsThinkingTokenBudget: true },
+    },
+  })
+  assert(r.ok && r.storage === 'route', 'set-thinking route-level ok: ' + JSON.stringify(r))
+  const prof0 = provs()['think-gw']
+  assert(prof0.reasoning === 'high', 'route default level persisted')
+  assert(prof0.thinkingBudgets.high === 8192 && prof0.thinkingBudgets.minimal === 128, 'thinking budgets persisted')
+  assert(prof0.compat.thinkingFormat === 'openrouter' && prof0.compat.supportsThinkingTokenBudget === true, 'route compat persisted')
+
+  // A partial budget object is invalid (all four keys are required by the schema)
+  r = await P('set-thinking', { route: 'think-gw', patch: { thinkingBudgets: { minimal: 1, low: 2 } } })
+  assert(!r.ok && /thinkingBudgets/.test(r.error), 'partial thinkingBudgets rejected: ' + JSON.stringify(r))
+  // An unknown level is rejected rather than written (llm-pi-ai would refuse it)
+  r = await P('set-thinking', { route: 'think-gw', patch: { reasoning: 'ultra' } })
+  assert(!r.ok, 'unknown route reasoning level rejected')
+  // Route-level vs model-level mixups are named, not silently accepted
+  r = await P('set-thinking', { route: 'think-gw', patch: { reasoningEfforts: { high: 'high' } } })
+  assert(!r.ok && /modelId/.test(r.error), 'route-level reasoningEfforts rejected: ' + JSON.stringify(r))
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoning: 'high' } })
+  assert(!r.ok, 'model-level reasoning rejected')
+
+  // Per-model efforts on an explicit models list: manual spellings + a valueless level
+  r = await P('set-thinking', {
+    route: 'think-gw',
+    modelId: 'm1',
+    patch: { reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'ultra' } },
+  })
+  assert(r.ok && r.storage === 'models', 'set-thinking model (explicit list) ok: ' + JSON.stringify(r))
+  const m1 = provs()['think-gw'].models.find((m) => m.id === 'm1')
+  const m2 = provs()['think-gw'].models.find((m) => m.id === 'm2')
+  assert(m1.reasoningEfforts.off === null && m1.reasoningEfforts.max === 'ultra', 'model efforts persist manual spellings')
+  assert(m2.reasoningEfforts === undefined, 'the sibling model is untouched')
+  // Canonical order: the written dict follows the escalation order, not the input order
+  assert(JSON.stringify(Object.keys(m1.reasoningEfforts)) === JSON.stringify(['off', 'low', 'high', 'max']),
+    'effort keys are written in escalation order: ' + JSON.stringify(Object.keys(m1.reasoningEfforts)))
+
+  // Whitespace-only spelling collapses to a valueless level; false = non-reasoning
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoningEfforts: { off: '   ', high: 'high' } } })
+  assert(r.ok && provs()['think-gw'].models.find((m) => m.id === 'm1').reasoningEfforts.off === null,
+    'blank spelling normalizes to a valueless level')
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm2', patch: { reasoningEfforts: false } })
+  assert(r.ok && provs()['think-gw'].models.find((m) => m.id === 'm2').reasoningEfforts === false,
+    'false declares a non-reasoning model')
+  // null removes the field entirely (inherit the installed catalog capability)
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm2', patch: { reasoningEfforts: null } })
+  assert(r.ok && !Object.hasOwn(provs()['think-gw'].models.find((m) => m.id === 'm2'), 'reasoningEfforts'),
+    'null deletes reasoningEfforts')
+  // Unknown level keys are rejected
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoningEfforts: { turbo: 'x' } } })
+  assert(!r.ok && /未知档位/.test(r.error), 'unknown effort level rejected: ' + JSON.stringify(r))
+  // llm-pi-ai's own resolveModelReasoning rules, so a profile it would refuse is
+  // never written: a thinking level needs a wire value...
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoningEfforts: { off: null, high: null } } })
+  assert(!r.ok && /只有 off 档可以留空/.test(r.error), 'valueless thinking level rejected: ' + JSON.stringify(r))
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoningEfforts: { high: '   ' } } })
+  assert(!r.ok, 'blank spelling for a thinking level rejected')
+  // ...and `{off: null}` alone is not a non-reasoning model (that is `false`)
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoningEfforts: { off: null } } })
+  assert(!r.ok && /非推理/.test(r.error), 'off-only effort map rejected with the false suggestion: ' + JSON.stringify(r))
+  // `off` WITH a value is legal (some gateways send off=none)
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'm1', patch: { reasoningEfforts: { off: 'none', high: 'high' } } })
+  assert(r.ok && provs()['think-gw'].models.find((m) => m.id === 'm1').reasoningEfforts.off === 'none',
+    'off may carry an explicit wire value')
+  // A model that is not in the explicit list cannot be given an override
+  r = await P('set-thinking', { route: 'think-gw', modelId: 'ghost', patch: { reasoningEfforts: { high: 'high' } } })
+  assert(!r.ok, 'unknown model on an explicit-models route rejected')
+
+  // Catalog route: writing a model's effort must NOT materialize a `models` list
+  r = await P('set-thinking', {
+    route: 'openrouter',
+    modelId: 'openai/gpt-4o-mini',
+    patch: { reasoningEfforts: { off: null, high: 'high' }, compat: { thinkingFormat: 'openrouter' } },
+  })
+  assert(r.ok && r.storage === 'modelOverrides', 'catalog-route model uses modelOverrides: ' + JSON.stringify(r))
+  const orProf = provs()['openrouter']
+  assert(orProf.models === undefined, 'catalog route was NOT narrowed to a models list')
+  assert(orProf.modelOverrides['openai/gpt-4o-mini'].reasoningEfforts.high === 'high', 'override carries the effort map')
+  assert(orProf.modelOverrides['openai/gpt-4o-mini'].compat.thinkingFormat === 'openrouter', 'override carries the compat switch')
+  // Deleting every field drops the override container again
+  r = await P('set-thinking', {
+    route: 'openrouter',
+    modelId: 'openai/gpt-4o-mini',
+    patch: { reasoningEfforts: null, compat: { thinkingFormat: null } },
+  })
+  assert(r.ok && provs()['openrouter'].modelOverrides === undefined, 'emptied override container is removed')
+  // A typo is refused while the installed catalog is non-empty (deepseek here)
+  r = await P('set-thinking', { route: 'deepseek', modelId: 'ghost', patch: { reasoningEfforts: { high: 'high' } } })
+  assert(!r.ok && /模型目录/.test(r.error), 'unknown model in a non-empty catalog rejected: ' + JSON.stringify(r))
+
+  // get-provider exposes the route-level thinking state for the editor
+  r = await P('get-provider', { route: 'think-gw' })
+  assert(r.ok && r.reasoning === 'high' && r.thinkingBudgets.high === 8192 && r.compat.thinkingFormat === 'openrouter',
+    'get-provider exposes route thinking state: ' + JSON.stringify({ reasoning: r.reasoning, compat: r.compat }))
+  assert(r.models.find((m) => m.id === 'm1').reasoningEfforts.high === 'high', 'get-provider keeps model effort maps')
+  assert(r.modelOverrides !== undefined, 'get-provider exposes the overrides map')
+
+  const keep = Object.fromEntries(
+    Object.entries(provs()).filter(([route]) => !['think-gw', 'openrouter', 'deepseek'].includes(route)),
+  )
+  await store.replace(NS, { providers: keep })
+}
+
+// --- OpenRouter routing injection (ports dsh-openrouter-providers) ----------
+{
+  r = await P('get-openrouter')
+  assert(r.ok && r.state.enabled === true && r.state.mode === 'only' && r.state.quantization === 'off',
+    'openrouter defaults: ' + JSON.stringify(r.state))
+  assert(r.active === false, 'inert by default: empty list + no quantization')
+  assert(r.shaper.installed === true, 'the fetch shaper is mounted when fetch exists')
+  assert(r.selfTest.changed === false, 'self-test reports no injection while inert')
+
+  r = await P('set-openrouter', { patch: { providers: 'DeepInfra\nTogether', mode: 'only' } })
+  assert(r.ok && r.active === true, 'setting a provider list activates injection: ' + JSON.stringify(r.state))
+  assert(r.state.providers.length === 2 && r.state.providers[0] === 'DeepInfra', 'provider slugs parsed from text')
+  assert(JSON.stringify(r.selfTest.params) === JSON.stringify({ only: ['DeepInfra', 'Together'], allow_fallbacks: false }),
+    'only mode pairs with allow_fallbacks=false: ' + JSON.stringify(r.selfTest.params))
+  assert(r.selfTest.changed === true, 'self-test reports the injection')
+
+  // The live shaper rewrites a real OpenRouter call exactly once.
+  fetchCalls.length = 0
+  await sandbox.fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+  })
+  assert(fetchCalls.length === 1, 'one upstream call recorded')
+  const shaped = JSON.parse(fetchCalls[0].init.body)
+  assert(JSON.stringify(shaped.provider) === JSON.stringify({ only: ['DeepInfra', 'Together'], allow_fallbacks: false }),
+    'upstream body carries provider.only: ' + JSON.stringify(shaped.provider))
+  assert(shaped.model === 'deepseek/deepseek-chat' && shaped.stream === true, 'the rest of the body is preserved')
+  const sentHeaders = fetchCalls[0].init.headers
+  assert(sentHeaders['HTTP-Referer'] === 'https://github.com/deepseek-ai/deepseek-harness', 'HTTP-Referer attribution sent')
+  assert(sentHeaders['X-OpenRouter-Title'] === 'DeepSeek Harness OpenRouter', 'X-OpenRouter-Title attribution sent')
+  assert(sentHeaders['X-OpenRouter-Categories'] === 'cli-agent', 'X-OpenRouter-Categories attribution sent')
+  assert(sentHeaders['content-type'] === 'application/json', 'existing headers survive')
+
+  // order mode flips allow_fallbacks, and quantization is a one-element array
+  r = await P('set-openrouter', { patch: { mode: 'order', quantization: 'int8' } })
+  assert(JSON.stringify(r.selfTest.params) === JSON.stringify({
+    order: ['DeepInfra', 'Together'], allow_fallbacks: true, quantizations: ['int8'],
+  }), 'order mode + quantizations shape: ' + JSON.stringify(r.selfTest.params))
+
+  // A foreign host, a GET, and a non-JSON body are never touched
+  fetchCalls.length = 0
+  const untouched = JSON.stringify({ model: 'x', messages: [] })
+  await sandbox.fetch('https://api.deepseek.com/v1/chat/completions', { method: 'POST', body: untouched })
+  await sandbox.fetch('https://openrouter.ai/api/v1/models', { method: 'GET' })
+  await sandbox.fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', body: 'not json' })
+  assert(fetchCalls[0].init.body === untouched, 'a foreign host is left byte-identical')
+  assert(fetchCalls[1].init.body === undefined, 'a GET is left alone')
+  assert(fetchCalls[2].init.body === 'not json', 'an unparseable body is left byte-identical')
+
+  // Disabling stops both the body shaping and the attribution headers
+  r = await P('set-openrouter', { patch: { enabled: false } })
+  assert(r.active === false && r.selfTest.changed === false, 'disabled state is inert')
+  fetchCalls.length = 0
+  const inertBody = JSON.stringify({ model: 'm', messages: [] })
+  await sandbox.fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: {}, body: inertBody })
+  assert(fetchCalls[0].init.body === inertBody, 'disabled: body untouched')
+  assert(fetchCalls[0].init.headers['HTTP-Referer'] === undefined, 'disabled: no attribution headers')
+
+  // Invalid patches are rejected, not persisted
+  r = await P('set-openrouter', { patch: { mode: 'sideways' } })
+  assert(!r.ok, 'invalid mode rejected')
+  r = await P('set-openrouter', { patch: { quantization: 'int3' } })
+  assert(!r.ok, 'invalid quantization rejected')
+
+  // Legacy import: the reference plugin's own JSON document.
+  {
+    const fsp = await import('node:fs/promises')
+    const tmp = path.join(__dirname, '.tmp-openrouter')
+    await fsp.mkdir(tmp, { recursive: true })
+    await fsp.writeFile(
+      path.join(tmp, 'openrouter-providers.json'),
+      JSON.stringify({ enabled: true, mode: 'order', providers: ['LegacyA', 'LegacyB'], quantization: 'fp8' }),
+      'utf8',
+    )
+    const prevHome = process.env.DSH_HOME
+    process.env.DSH_HOME = tmp
+    try {
+      r = await P('import-openrouter')
+      assert(r.ok && r.imported.quantization === 'fp8', 'legacy JSON imported: ' + JSON.stringify(r.imported))
+      assert(r.state.providers[0] === 'LegacyA' && r.state.mode === 'order' && r.state.quantization === 'fp8',
+        'legacy values applied to the live state')
+      assert(r.sources.some((s) => s.status === 'imported'), 'the winning source is reported')
+    } finally {
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+      await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  }
+
+  // Legacy import: the retired settings document's YAML section.
+  {
+    const fsp = await import('node:fs/promises')
+    const tmp = path.join(__dirname, '.tmp-openrouter-yaml')
+    await fsp.mkdir(tmp, { recursive: true })
+    await fsp.writeFile(path.join(tmp, 'settings.yaml.imported'), [
+      'other-plugin:',
+      '  keep: 1',
+      'openrouter-providers:',
+      '  enabled: true',
+      '  mode: only',
+      '  quantization: int4',
+      '  providers:',
+      '    - DeepInfra',
+      '    - Together',
+      'later-plugin:',
+      '  nope: 1',
+      '',
+    ].join('\n'), 'utf8')
+    const prevHome = process.env.DSH_HOME
+    process.env.DSH_HOME = tmp
+    try {
+      r = await P('import-openrouter')
+      assert(r.ok && r.imported.quantization === 'int4', 'YAML section imported: ' + JSON.stringify(r))
+      assert(JSON.stringify(r.state.providers) === JSON.stringify(['DeepInfra', 'Together']), 'YAML block list parsed')
+      assert(r.state.mode === 'only', 'YAML mode parsed')
+    } finally {
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+      await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  }
+
+  r = await P('openrouter-selftest')
+  assert(r.ok && typeof r.active === 'boolean' && r.selfTest.probe.includes('"model"'), 'self-test RPC answers the probe')
+
+  // The state lives in this plugin's own settings entry, next to the others
+  assert(store.state().openrouter !== undefined && store.state().openrouter.quantization === 'int4',
+    'openrouter state persisted in the plugin entry')
+  assert(Object.keys(store.state()).every((k) => STATE_KEYS.includes(k)), 'state keys stay inside the declared schema')
+}
+
+// --- FINAL: uninstall while the document-updated re-park listener is live ---
 // Restore moves parked providers BACK into providers and its write emits
-// settings/updated — the unloading flag must keep the listener from
+// settings/document-updated — the unloading flag must keep the listener from
 // immediately re-parking them (which would silently break the uninstall
 // "no data lost" guarantee). Runs last because it tears down every effect,
 // exactly like a real cordis fiber unload.
@@ -909,9 +1312,12 @@ await P('delete-provider', { route: 'comp-b' })
   // Fire the event after the disposers ran — the way dsh-settings' queued
   // write would commit. The listener is disposed AND the unloading flag set,
   // so nothing may re-park behind the safety net's back.
-  for (const fn of listeners['settings/updated'] || []) try { fn('llm-pi-ai', 9) } catch { /* ignore */ }
+  for (const fn of listeners['settings/document-updated'] || []) try { fn('llm-pi-ai', 9) } catch { /* ignore */ }
   await new Promise((res) => setTimeout(res, 5))
-  assert(provs()['unl-gw'] && !Object.hasOwn(dis(), 'unl-gw'), 'uninstall-restore is NOT undone by a late settings/updated re-park')
+  assert(provs()['unl-gw'] && !Object.hasOwn(dis(), 'unl-gw'), 'uninstall-restore is NOT undone by a late document-updated re-park')
+  // The OpenRouter shaper's disposer ran with the fiber: the original global
+  // fetch is back, so an uninstalled plugin cannot keep rewriting requests.
+  assert(sandbox.fetch === stubFetch, 'unload restored the original global fetch')
 }
 
 console.log('PASS: host end-to-end smoke — all assertions green')

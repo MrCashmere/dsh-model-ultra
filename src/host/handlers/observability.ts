@@ -11,7 +11,8 @@
 
 import type { HostCtx } from '../utils'
 import { getLogRing, getStatsRecorder, persistStats } from '../statsStore'
-import { readProviders, readDisabled } from '../utils'
+import { readProviders, readDisabled, readRoutesRootKey } from '../utils'
+import { COMPOSITES_KEY, ROUTES_KEY } from '../../shared/constants'
 import { getHealthTracker } from '../health'
 
 /** Recursively drop `undefined` values (arrays/objects) so the result is
@@ -155,8 +156,9 @@ export async function probeAll(ctx: HostCtx) {
 function collectProbeTargets(ctx: HostCtx): Array<{ provider: string; model: string }> {
   const out: Array<{ provider: string; model: string }> = []
   const st = ctx.get('settings')
-  const section = (st?.get('llm-pi-ai') as Record<string, unknown> | undefined) || {}
-  const routesRaw = section.routes as Record<string, { targets?: Array<{ provider: string; model: string }> }> | undefined
+  // Routes and composites are this plugin's own settings state (see
+  // ./utils.ts); they no longer live in the llm-pi-ai section.
+  const routesRaw = readRoutesRootKey(st, ROUTES_KEY) as Record<string, { targets?: Array<{ provider: string; model: string }> }> | undefined
   if (routesRaw && typeof routesRaw === 'object') {
     for (const spec of Object.values(routesRaw)) {
       if (spec && Array.isArray(spec.targets)) {
@@ -166,7 +168,7 @@ function collectProbeTargets(ctx: HostCtx): Array<{ provider: string; model: str
       }
     }
   }
-  const compositesRaw = section.composites as Record<string, { members?: string[] }> | undefined
+  const compositesRaw = readRoutesRootKey(st, COMPOSITES_KEY) as Record<string, { members?: string[] }> | undefined
   if (compositesRaw && typeof compositesRaw === 'object') {
     const providers = readProviders(st)
     for (const spec of Object.values(compositesRaw)) {

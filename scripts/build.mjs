@@ -17,7 +17,9 @@
 import { build } from 'esbuild'
 import { writeFileSync, readFileSync } from 'node:fs'
 
-const PKG = 'dsh-model-pro'
+// The ModuleLoader bundle id must equal the package name, so read it instead of
+// duplicating the literal (a rename then cannot drift).
+const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name
 
 // Framework packages the runtime provides — never bundle these.
 const HOST_EXTERNAL = [

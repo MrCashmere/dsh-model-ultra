@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Model Ultra",
+    "description": "Manage llm-pi-ai providers, custom headers, per-model thinking effort, OpenRouter provider routing/attribution, smart routing and per-model connectivity tests from the Settings panel."
+  }
+}

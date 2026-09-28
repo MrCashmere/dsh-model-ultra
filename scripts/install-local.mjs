@@ -15,8 +15,8 @@
  *   改代码 → npm run build → 重启 dsh / 刷新 Web GUI。
  *
  * 回退到 registry 版本：
- *   dsh plugin --profile web remove dsh-model-pro
- *   dsh plugin --profile web add npm:dsh-model-pro
+ *   dsh plugin --profile web remove dsh-model-ultra
+ *   dsh plugin --profile web add npm:dsh-model-ultra
  */
 
 import { spawnSync } from 'node:child_process'

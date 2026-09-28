@@ -1,7 +1,7 @@
 /**
- * dsh-model-pro — Host half entry point (static-bundle mode).
+ * dsh-model-ultra — Host half entry point (static-bundle mode).
  *
- * Mounts the `modelPro` Typert Remote service (the client's RPC surface) and
+ * Mounts the `modelUltra` Typert Remote service (the client's RPC surface) and
  * registers its manifest, then wires up smart-routing, composites, health
  * probing, observability, and the uninstall-restore safety net — through
  * Cordis `ctx` (there is no dynamic `harness` global in a static plugin).
@@ -9,20 +9,25 @@
  * Static-mounted plugins export `apply` (+ optional `name` / `inject`); the
  * loader imports this module and calls apply(ctx).
  *
- * Disabled providers are moved to a separate `disabledProviders` dict so the
- * llm-pi-ai adapter (which only reads `providers`) stops registering them.
- * Because `disabledProviders` is a foreign key only this plugin understands,
- * the host also restores them to `providers` on unload — no model data is lost.
+ * Disabled providers are moved to this plugin's own `disabledProviders` state
+ * (the `dsh-model-ultra` settings entry — llm-pi-ai's section only accepts its own
+ * volatile `providers` field), so the llm-pi-ai adapter (which only reads
+ * `providers`) stops registering them. Because that parking is owned by this
+ * plugin alone, the host also restores them to `providers` on unload — no model
+ * data is lost.
  */
 
 import type { HostCtx } from './utils'
-import { ModelProRuntime } from './service'
+import { ModelUltraRuntime } from './service'
 import { TYPERT_MANIFEST, PACKAGE } from '../shared/contract'
 import { registerRouterAdapter } from './router'
 import { registerStreamRewrite } from './streamRewrite'
 import { restoreDisabledOnUnload, parkDisabledProviders } from './lifecycle'
+import { mountOpenRouterShaper, readOpenRouterState } from './openrouter'
 import { initHealthTracker, resetHealthSingleton } from './health'
 import { resetObservabilitySingletons, hydrateObservability, persistStats } from './statsStore'
+
+export { Config } from './config'
 
 /** Loader entry id / client bundle id. */
 export const name = PACKAGE
@@ -42,8 +47,16 @@ export function apply(ctx: HostCtx) {
   const c = ctx as any
 
   // Mount the RPC service and register its strict manifest with the Gateway.
-  new ModelProRuntime(ctx)
-  c.effect(() => c.typert.register(TYPERT_MANIFEST), 'dsh-model-pro: typert manifest')
+  new ModelUltraRuntime(ctx)
+  c.effect(() => c.typert.register(TYPERT_MANIFEST), 'dsh-model-ultra: typert manifest')
+
+  // This plugin's own settings entry (STATE_NS) exists only as the persistence
+  // surface for its internal state (see ./config.ts). Its auto-generated
+  // settings page would expose that state as editable form fields, so opt out:
+  // the plugin ships its own 模型 Ultra page in the `settings.section` slot.
+  try {
+    c.get('settings')?.configure?.({ auto: false })
+  } catch { /* older/newer settings service — the auto page is only cosmetic */ }
 
   // Rebind observability singletons to this fiber (fresh on each apply).
   resetHealthSingleton()
@@ -64,7 +77,7 @@ export function apply(ctx: HostCtx) {
     timer.interval(() => { void persistStats(ctx) }, 5000)
   }
   if (typeof c.effect === 'function') {
-    c.effect(() => () => { void persistStats(ctx, { force: true }) }, 'dsh-model-pro: stats flush')
+    c.effect(() => () => { void persistStats(ctx, { force: true }) }, 'dsh-model-ultra: stats flush')
   }
 
   // Smart routing: expose route combos + composites as models on the synthetic
@@ -73,14 +86,24 @@ export function apply(ctx: HostCtx) {
   // Per-provider local model mapping: select X, forward requestModel if set.
   registerStreamRewrite(ctx)
 
+  // OpenRouter provider-list / quantization routing: shape outgoing request
+  // bodies through a transparent `fetch` wrapper. State is read per request so
+  // an edit applies to the next call with no restart; the wrapper is removed
+  // when this fiber unloads (the settings page reports its live status).
+  const unmountShaper = mountOpenRouterShaper(
+    () => readOpenRouterState(ctx.get('settings')),
+    (error) => { try { ctx.logger?.warn?.('dsh-model-ultra: openrouter shaper', error) } catch { /* ignore */ } },
+  )
+  if (typeof c.effect === 'function') c.effect(() => unmountShaper, 'dsh-model-ultra: openrouter fetch shaper')
+
   // Reinstall recovery: parked providers keep their `disabled` marker, so on
   // startup re-park them into disabledProviders (adapter keeps ignoring them).
   //
   // Two-phase, because load order is not guaranteed:
   //  1. eager attempt — works when pi-ai already registered its section;
-  //  2. `settings/updated` re-park — dsh-settings emits this for the
-  //     `llm-pi-ai` namespace when it first commits (pi-ai registering its
-  //     section) and on every later write. If the eager attempt ran before
+  //  2. `settings/document-updated` re-park — dsh-settings emits this for a
+  //     namespace when its entry first commits (pi-ai registering its section)
+  //     and on every later write of that entry. If the eager attempt ran before
   //     that section resolved (model-pro loaded before pi-ai), this catches
   //     the marked providers as soon as they become readable and parks them.
   //
@@ -88,8 +111,8 @@ export function apply(ctx: HostCtx) {
   // actually moved, so re-firing on our own write settles after one pass.
   // The `unloading` flag stops the listener from fighting the
   // uninstall-restore: restore moves parked providers BACK into `providers`
-  // (marker intact) and its write emits settings/updated — without the flag
-  // this listener would immediately re-park them behind the safety net's back.
+  // (marker intact) and its write emits the event — without the flag this
+  // listener would immediately re-park them behind the safety net's back.
   let unloading = false
   const reparkOnSettings = () => {
     if (unloading) return
@@ -98,7 +121,7 @@ export function apply(ctx: HostCtx) {
   reparkOnSettings()
   if (typeof c.on === 'function' && typeof c.effect === 'function') {
     c.effect(() => {
-      const off = c.on('settings/updated', (ns: string) => {
+      const off = c.on('settings/document-updated', (ns: string) => {
         try {
           if (ns !== 'llm-pi-ai') return
           reparkOnSettings()
@@ -107,7 +130,7 @@ export function apply(ctx: HostCtx) {
       return () => {
         try { off?.() } catch { /* ignore */ }
       }
-    }, 'dsh-model-pro: reinstall re-park on settings/updated')
+    }, 'dsh-model-ultra: reinstall re-park on settings/document-updated')
   } else {
     // Fallback for harness contexts without event plumbing: settle async.
     queueMicrotask(reparkOnSettings)

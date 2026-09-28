@@ -560,5 +560,5 @@ export function registerRouterAdapter(ctx: HostCtx): void {
     } catch {
       return () => undefined
     }
-  }, 'dsh-model-pro: router adapter')
+  }, 'dsh-model-ultra: router adapter')
 }

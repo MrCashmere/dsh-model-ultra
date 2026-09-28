@@ -8,8 +8,9 @@ import { OverviewPanel } from './OverviewPanel'
 import { HeadersPanel } from './HeadersPanel'
 import { ModelsPanel } from './ModelsPanel'
 import { TestPanel } from './TestPanel'
+import { ThinkingPanel } from './ThinkingPanel'
 
-export type EditorTab = 'overview' | 'headers' | 'models' | 'test'
+export type EditorTab = 'overview' | 'headers' | 'models' | 'thinking' | 'test'
 
 interface Props {
   t: TFunc
@@ -133,6 +134,17 @@ export function ProviderEditor({ t, call, data, initialTab, onBack, fail }: Prop
         fail={fail}
         inlineStatus={inlineStatus}
       />
+    ) : tab === 'thinking' ? (
+      <ThinkingPanel
+        t={t}
+        call={call}
+        data={data}
+        busy={busy}
+        setBusy={setBusy}
+        setStatus={setStatus}
+        fail={fail}
+        inlineStatus={inlineStatus}
+      />
     ) : (
       <TestPanel
         t={t}
@@ -177,6 +189,7 @@ export function ProviderEditor({ t, call, data, initialTab, onBack, fail }: Prop
           {tabBtn('overview', t('tabOverview'))}
           {tabBtn('headers', t('tabHeaders'), (headers || []).length)}
           {tabBtn('models', t('tabModels'), (models || []).length)}
+          {tabBtn('thinking', t('tabThinking'))}
           {tabBtn('test', t('tabTest'))}
         </div>
         {activePanel}

@@ -1,10 +1,10 @@
 /**
- * dsh-model-pro — Host Typert Remote service.
+ * dsh-model-ultra — Host Typert Remote service.
  *
- * `ModelProRuntime` is the Host half's RPC surface for static-bundle mode. Each
+ * `ModelUltraRuntime` is the Host half's RPC surface for static-bundle mode. Each
  * method takes the single JSON `args` object the client sends and delegates to
  * the SAME handler functions the dynamic build used — the business logic is
- * unchanged; only the transport wrapper differs. The service key `modelPro`
+ * unchanged; only the transport wrapper differs. The service key `modelUltra`
  * matches the Typert manifest and the client's reflect lookup.
  */
 
@@ -33,8 +33,10 @@ import {
   probeAll,
 } from './handlers/observability'
 import { getUiPrefs, setUiPrefs } from './handlers/uiPrefs'
+import { setThinking } from './handlers/thinking'
+import { getOpenRouter, setOpenRouter, importOpenRouter, openRouterSelfTest } from './handlers/openrouter'
 
-export class ModelProRuntime extends (TypertRemoteService as any) {
+export class ModelUltraRuntime extends (TypertRemoteService as any) {
   ctx: HostCtx
 
   constructor(ctx: HostCtx) {
@@ -116,5 +118,20 @@ export class ModelProRuntime extends (TypertRemoteService as any) {
   }
   async setUiPrefs(args: any) {
     return setUiPrefs(this.ctx, args || {})
+  }
+  async setThinking(args: any) {
+    return setThinking(this.ctx, args || {})
+  }
+  async getOpenRouter() {
+    return getOpenRouter(this.ctx)
+  }
+  async setOpenRouter(args: any) {
+    return setOpenRouter(this.ctx, args || {})
+  }
+  async importOpenRouter() {
+    return importOpenRouter(this.ctx)
+  }
+  async openRouterSelfTest() {
+    return openRouterSelfTest(this.ctx)
   }
 }

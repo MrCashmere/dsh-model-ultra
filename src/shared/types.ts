@@ -165,6 +165,14 @@ export interface ProviderData {
   usesCatalog: boolean
   /** Advertised model ids for the test dropdown (advisory; may be empty). */
   availableModels?: string[]
+  /** Route-level default thinking level (llm-pi-ai `reasoning`). */
+  reasoning?: string
+  /** Route-level token budgets (llm-pi-ai `thinkingBudgets`, all four keys). */
+  thinkingBudgets?: Record<string, number>
+  /** Route-level compat switches (llm-pi-ai `compat`). */
+  compat?: Record<string, unknown>
+  /** Per-model overrides used by catalog routes (llm-pi-ai `modelOverrides`). */
+  modelOverrides?: Record<string, Record<string, unknown>>
   /** Whether an encrypted API-key snapshot is stored. */
   hasSecret?: boolean
   /** Decrypted API key — present only when the caller passed `includeSecret`. */
@@ -203,7 +211,7 @@ export interface RPCResult<T = unknown> {
   [key: string]: unknown
 }
 
-/** The boot state for the ModelProPage component */
+/** The boot state for the ModelUltraPage component */
 export interface BootState {
   providers: ProviderListItem[]
   protocols: string[]

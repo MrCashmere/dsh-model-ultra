@@ -1,4 +1,4 @@
-/** ModelProPage — the dashboard. Segments (all/enabled/disabled), a guided
+/** ModelUltraPage — the dashboard. Segments (all/enabled/disabled), a guided
  * create flow (with "create & test"), and state-rail provider cards. */
 
 import React from '../react'
@@ -8,6 +8,7 @@ import { CreateForm } from './CreateForm'
 import { ProviderCard } from './ProviderCard'
 import { ProviderEditor, type EditorTab } from './ProviderEditor'
 import { RoutesPanel } from './RoutesPanel'
+import { OpenRouterPanel } from './OpenRouterPanel'
 
 interface Props {
   t: TFunc
@@ -23,10 +24,10 @@ const EMPTY_FORM = (): CreateFormState => ({
 const validRoute = (r: string) => /^[A-Za-z0-9_.-]+$/.test(r)
 const validBaseURL = (u: string) => /^https?:\/\/.+/i.test(u)
 
-export function ModelProPage({ t, call }: Props) {
+export function ModelUltraPage({ t, call }: Props) {
   const [boot, setBoot] = React.useState<BootState>({ providers: [], protocols: [], writable: true, error: '' })
   const [selected, setSelected] = React.useState<ProviderData | null>(null)
-  const [view, setView] = React.useState<'providers' | 'routes'>('providers')
+  const [view, setView] = React.useState<'providers' | 'routes' | 'openrouter'>('providers')
   const [initTab, setInitTab] = React.useState<EditorTab>('overview')
   const [creating, setCreating] = React.useState(false)
   const [form, setForm] = React.useState<CreateFormState>(EMPTY_FORM())
@@ -161,9 +162,22 @@ export function ModelProPage({ t, call }: Props) {
         <button className={view === 'routes' ? 'mpro-tab mpro-tabActive' : 'mpro-tab'} onClick={() => setView('routes')}>
           {t('tabRoutes')}
         </button>
+        <button className={view === 'openrouter' ? 'mpro-tab mpro-tabActive' : 'mpro-tab'} onClick={() => setView('openrouter')}>
+          {t('tabOpenRouter')}
+        </button>
       </div>
       {view === 'routes' ? (
         <RoutesPanel t={t} call={call} providers={providers} />
+      ) : view === 'openrouter' ? (
+        <OpenRouterPanel
+          t={t}
+          call={call}
+          busy={busy}
+          setBusy={setBusy}
+          setStatus={setStatus}
+          fail={fail}
+          inlineStatus={status ? <span className={status.kind === 'ok' ? 'mpro-inlineStatus mpro-inlineStatusOk' : 'mpro-inlineStatus mpro-inlineStatusErr'}>{status.text}</span> : null}
+        />
       ) : (
         <>
           <div className="mpro-segs">

@@ -1,14 +1,15 @@
 /**
- * dsh-model-pro — Host half lifecycle hooks.
+ * dsh-model-ultra — Host half lifecycle hooks.
  *
  * restoreDisabledOnUnload: the inverse of the disable (toggle) operation, run
  * when the plugin is unloaded — i.e. when it is uninstalled or disabled. Every
  * provider parked in `disabledProviders` is moved back into `providers` with
  * its full original profile untouched, so the data lives where llm-pi-ai
- * actually persists and resolves it. `disabledProviders` is a foreign key to
- * llm-pi-ai's schema — only this plugin understands it — so without this the
- * disabled providers (models included) would be silently lost the moment this
- * plugin is removed. Restoring is the "no data lost on uninstall" guarantee.
+ * actually persists and resolves it. `disabledProviders` is this plugin's own
+ * settings state (the `dsh-model-ultra` entry), unknown to llm-pi-ai — so without
+ * this the disabled providers (models included) would be silently lost the
+ * moment this plugin is removed. Restoring is the "no data lost on uninstall"
+ * guarantee.
  */
 
 import type { HostCtx } from './utils'
@@ -58,7 +59,9 @@ export async function restoreDisabledOnUnload(ctx: HostCtx) {
     await writeSection(st, nextProviders as any, nextDisabled as any)
   } catch (err) {
     try {
-      ;(ctx.get('logger') as any)?.warn?.(`dsh-model-pro: 卸载还原失败 — ${String((err as Error)?.message || err)}`)
+      // `logger` is a Cordis context property, not a service: ctx.get('logger')
+      // returns undefined.
+      ctx.logger?.warn?.(`dsh-model-ultra: 卸载还原失败 — ${String((err as Error)?.message || err)}`)
     } catch { /* ignore */ }
     return { restored: 0, skipped }
   }

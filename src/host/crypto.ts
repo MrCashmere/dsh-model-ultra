@@ -1,4 +1,4 @@
-/** Host-side secret handling for dsh-model-pro.
+/** Host-side secret handling for dsh-model-ultra.
  *
  * Provider API keys are stored in TWO places with different guarantees:
  *  - authoritative: in the DSH `credentials` service under the profile's

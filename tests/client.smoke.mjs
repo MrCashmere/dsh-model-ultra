@@ -6,7 +6,7 @@
  * synchronous `require` and returns the CJS module (exporting apply). We
  * provide `require` (React + externals), a minimal `document` for CSS
  * adoption, and a `ctx` whose `remote.$mount` + `reflect.get` expose a mocked
- * `modelPro` remote. The remote's methods return the Gateway envelope
+ * `modelUltra` remote. The remote's methods return the Gateway envelope
  * `{ ok, value }` wrapping the business `{ ok, ... }` payload — exactly what
  * rpc.ts unwraps. Then renders the registered `settings.section` slot through
  * a tiny React renderer and asserts the redesigned dashboard constructs.
@@ -66,6 +66,13 @@ class FakeReact {
 
   useMemo(fn) {
     return fn()
+  }
+
+  useRef(init) {
+    const inst = this.current
+    const i = inst.hookIdx++
+    if (i >= inst.hooks.length) inst.hooks.push({ current: init })
+    return inst.hooks[i]
   }
 
   clone() {
@@ -136,11 +143,72 @@ const testProviders = [
 // { ok, value } wrapping the business { ok, ... } payload.
 // ---------------------------------------------------------------------------
 const uiPrefsState = { showRouteBadge: true }
+/** Every RPC the components issued, in order (asserted by the new tabs). */
+const rpcCalls = []
+/** Mutable OpenRouter state served by the mocked get/set handlers. */
+const openRouterState = {
+  enabled: true,
+  mode: 'only',
+  providers: ['DeepInfra', 'Together'],
+  quantization: 'int8',
+  hosts: ['openrouter.ai'],
+  attribution: true,
+  attributionTitle: 'DeepSeek Harness OpenRouter',
+}
 const businessFor = (method, payload) => {
   if (method === 'listProviders') return { ok: true, providers: testProviders, protocols: ['openai-completions', 'openai-responses', 'anthropic-messages'], writable: true }
   if (method === 'listRoutes') return { ok: true, routes: { auto: { strategy: 'priority', targets: [{ provider: 'deepseek', model: 'deepseek-chat' }] } } }
-  if (method === 'getProvider') return { ok: true, models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }], availableModels: [] }
+  if (method === 'getProvider') return {
+    ok: true,
+    route: 'deepseek',
+    displayName: 'DeepSeek',
+    models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }],
+    availableModels: ['deepseek-v3'],
+    usesCatalog: false,
+    // Thinking-effort state the panel reads (route level + per-model overrides)
+    reasoning: 'high',
+    thinkingBudgets: { minimal: 128, low: 512, medium: 2048, high: 8192 },
+    compat: { thinkingFormat: 'openrouter', supportsReasoningEffort: true },
+    modelOverrides: { 'deepseek-v3': { reasoningEfforts: { high: 'high' } } },
+  }
+  if (method === 'setThinking') return { ok: true, storage: payload && payload.modelId ? 'models' : 'route' }
   if (method === 'listComposites') return { ok: true, composites: {} }
+  if (method === 'getOpenRouter') return {
+    ok: true,
+    state: { ...openRouterState },
+    active: true,
+    writable: true,
+    defaults: openRouterState,
+    quantLevels: ['int8', 'fp8'],
+    shaper: { installed: true, calls: 7, shaped: 3, attributed: 3 },
+    selfTest: { changed: true, params: { only: [...openRouterState.providers], allow_fallbacks: false }, after: '{"model":"x","provider":{}}' },
+  }
+  if (method === 'setOpenRouter') {
+    Object.assign(openRouterState, (payload && payload.patch) || {})
+    return {
+      ok: true,
+      state: { ...openRouterState },
+      active: true,
+      shaper: { installed: true, calls: 8, shaped: 4, attributed: 4 },
+      selfTest: { changed: true, params: { only: [...openRouterState.providers], allow_fallbacks: false } },
+    }
+  }
+  if (method === 'openRouterSelfTest') return {
+    ok: true,
+    state: { ...openRouterState },
+    active: true,
+    shaper: { installed: true, calls: 9, shaped: 5, attributed: 5 },
+    selfTest: { changed: true, params: { only: [...openRouterState.providers], allow_fallbacks: false } },
+  }
+  if (method === 'importOpenRouter') return {
+    ok: true,
+    state: { ...openRouterState, providers: ['LegacyA'] },
+    imported: { providers: ['LegacyA'] },
+    sources: [{ path: '/tmp/openrouter-providers.json', status: 'imported' }],
+    active: true,
+    shaper: { installed: true, calls: 10, shaped: 6, attributed: 6 },
+    selfTest: { changed: true, params: { only: ['LegacyA'], allow_fallbacks: false } },
+  }
   if (method === 'getRouteStats') return {
     ok: true,
     byRoute: { 'auto': { calls: 12, errors: 1, latencySum: 4800, latencyN: 12, tokensIn: 100, tokensOut: 200 } },
@@ -160,16 +228,21 @@ const remoteMethods = [
   'setApiKey', 'listRoutes', 'setRoute', 'deleteRoute', 'listComposites', 'setComposite',
   'deleteComposite', 'previewComposite', 'getRouteStats', 'listRequestLogs',
   'clearRequestLogs', 'probeTarget', 'probeAll', 'getUiPrefs', 'setUiPrefs',
+  'setThinking', 'getOpenRouter', 'setOpenRouter', 'importOpenRouter', 'openRouterSelfTest',
 ]
 const remoteHandle = {}
 for (const m of remoteMethods) {
-  remoteHandle[m] = async (payload) => ({ ok: true, value: businessFor(m, payload) })
+  remoteHandle[m] = async (payload) => {
+    rpcCalls.push({ method: m, payload })
+    return { ok: true, value: businessFor(m, payload) }
+  }
 }
 
 const structures = []
 const fake = new FakeReact()
 const slotsByName = new Map()
 
+const reflectReads = []
 const ctx = {
   get: (name) => {
     if (name === 'locale') return {
@@ -185,17 +258,36 @@ const ctx = {
     }
     return undefined
   },
-  // API Gateway remote surface used by the static-bundle client.
-  remote: { $mount: async () => () => {} },
-  reflect: { get: (key) => (key === 'remote.modelPro' ? remoteHandle : undefined) },
+  // API Gateway remote surface used by the static-bundle client: the namespace
+  // is the traceable property `remote.modelUltra` (cordis forwards `remote.<ns>`
+  // through the service tracker) AND readable through reflect, exactly as the
+  // real gateway exposes it. resolveRemoteHandle must prefer the property.
+  remote: { $mount: async () => () => {}, modelUltra: remoteHandle },
+  reflect: { get: (key) => { reflectReads.push(key); return key === 'remote.modelUltra' ? remoteHandle : undefined } },
   effect: (fn) => { const c = fn(); if (typeof c === 'function') c(); return c },
 }
 
-// document shim for adoptStyles() (the client injects a <style> element).
+// document shim for adoptStyles(): the client owns a <style data-plugin> tag,
+// and the effect's disposer removes it on unload. `ctx.effect` below runs the
+// disposer eagerly, which is exactly the unload path — so `styleEl` must be
+// gone again after apply() while the CSS text stays captured in `structures`.
+let styleEl = null
+const createdStyles = []
 const documentShim = {
-  getElementById: () => null,
-  createElement: () => ({ set textContent(v) { structures.push(v) }, get textContent() { return '' } }),
-  head: { appendChild: () => {} },
+  getElementById: () => styleEl,
+  createElement: () => {
+    const el = {
+      attributes: {},
+      set textContent(v) { structures.push(v) },
+      get textContent() { return '' },
+      setAttribute(name, value) { el.attributes[name] = value },
+      getAttribute(name) { return el.attributes[name] ?? null },
+      remove() { if (styleEl === el) styleEl = null },
+    }
+    createdStyles.push(el)
+    return el
+  },
+  head: { appendChild: (el) => { styleEl = el } },
 }
 
 // Synchronous require the __ModuleLoader__ factory expects.
@@ -223,7 +315,7 @@ sandbox.window.__ModuleLoader__ = {
 
 const code = readFileSync(CLIENT_BUNDLE, 'utf8')
 vm.runInContext(code, vm.createContext(sandbox), { filename: 'model-pro-client.js' })
-assert(captured && captured.id === 'dsh-model-pro', 'client bundle registered under its package id')
+assert(captured && captured.id === 'dsh-model-ultra', 'client bundle registered under its package id')
 const moduleExports = captured.factory(requireShim)
 const plugin = moduleExports.apply ? moduleExports : moduleExports.default
 const badgeMod = moduleExports
@@ -233,12 +325,26 @@ const settingsSlot = slotsByName.get('settings.section')
 const badgeSlot = slotsByName.get('conversation.chat.turnTail')
 assert(settingsSlot && typeof settingsSlot.render === 'function', 'settings.section slot rendered')
 assert(settingsSlot.label && typeof settingsSlot.label.label === 'function', 'slot label registered')
-assert(badgeSlot && typeof badgeSlot.render === 'function' && typeof badgeSlot.label.select === 'function', 'turnTail badge slot registered with a select')
+assert(badgeSlot && typeof badgeSlot.render === 'function' && badgeSlot.label.id === 'dsh-model-ultra-route-badge', 'turnTail list-seat badge entry registered')
+assert(!('select' in badgeSlot.label), 'list seats carry no `select` (the component derives the window)')
 
 // let the async remote $mount effect resolve so `remote` is wired before the
 // dashboard's first refresh() fires (the client mounts the remote in an async
-// effect; reflect.get is synchronous but the await yields a microtask).
+// effect; the handle read is synchronous but the await yields a microtask).
 await new Promise((r) => setTimeout(r, 10))
+assert(reflectReads.length === 0, 'the mount resolved through the traceable `remote.modelUltra` property, not reflect')
+
+// -- every Remote-handle projection the host may expose --
+const { resolveRemoteHandle, remoteServiceKey } = badgeMod
+assert(remoteServiceKey('modelUltra') === 'remote.modelUltra', 'namespace service key is remote.<namespace>')
+const propOnly = { remote: { modelUltra: remoteHandle } }
+const reflectOnly = { remote: {}, reflect: { get: (k) => (k === 'remote.modelUltra' ? remoteHandle : undefined) } }
+const throwing = { remote: { get modelUltra() { throw new Error('inactive context') } }, reflect: { get: () => remoteHandle } }
+assert(resolveRemoteHandle(propOnly, 'modelUltra') === remoteHandle, 'resolves the traceable property projection')
+assert(resolveRemoteHandle(reflectOnly, 'modelUltra') === remoteHandle, 'falls back to the reflect projection')
+assert(resolveRemoteHandle(throwing, 'modelUltra') === remoteHandle, 'a throwing property read falls back to reflect')
+assert(resolveRemoteHandle({ remote: {} }, 'modelUltra') === undefined, 'an unmounted namespace resolves to undefined')
+assert(resolveRemoteHandle({}, 'modelUltra') === undefined, 'a host without remote/reflect resolves to undefined')
 
 // render the dashboard; allow the async refresh() to settle (the fake remote
 // call resolves on a macrotask, not just the microtask queue)
@@ -258,6 +364,12 @@ const css = structures.join('\n')
 for (const rule of ['.mpro-root', '.mpro-segs', '.mpro-pc', '.mpro-pcActive', '.mpro-pcOff', '.mpro-pill', '.mpro-pillActive', '.mpro-pillOff', '.mpro-verdictOk', '.mpro-discoverBar', '.mpro-step', '.mpro-setupCard', '.mpro-routesTab', '.mpro-statCard', '.mpro-hdotUp', '.mpro-routeRow', '.mpro-targetRow']) {
   assert(css.includes(rule), `styles include ${rule}`)
 }
+
+// -- the page CSS is injected as an OWNED <style data-plugin> element and the
+// effect disposer removes it again (no stacked rules across reloads) --
+assert(createdStyles.length === 1, 'exactly one <style> element created')
+assert(createdStyles[0].attributes['data-plugin'] === 'dsh-model-ultra', 'injected <style> is owned (data-plugin)')
+assert(styleEl === null, 'the styles effect disposer detached the <style> element on unload')
 
 // -- i18n safety copy present in bundle (esbuild escapes non-ASCII as \uXXXX
 // with UPPERCASE hex; match raw and escaped forms case-insensitively) --
@@ -349,20 +461,157 @@ renderAt(tree, fake, 'root', outA)
 assert(outA.some((n) => String(n.className).includes('mpro-addBar')), 'add-model form panel renders')
 assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || '')), 'add-model submit button renders')
 
-// -- conversation badge (turnTail): select + render pipeline --
+// -- thinking-effort tab: route defaults, budgets, per-model manual spellings --
 {
-  const sel = badgeSlot.label.select({ turn: { turn: 7, start: { time: 1700000000000 - 5000 }, end: { time: 1700000000000 } }, seq: 42 })
-  assert(sel && typeof sel.from === 'number' && typeof sel.to === 'number' && sel.from < 1700000000000 && sel.to >= 1700000000000, 'badge select derives the turn window: ' + JSON.stringify(sel))
-  assert(badgeSlot.label.select({}) === null, 'badge select declines turns without boundaries')
-  assert(badgeSlot.label.select(null) === null, 'badge select declines a missing owner')
+  const thTab = outA.find((n) => n.tag === 'button' && /tabThinking/i.test(n.text || ''))
+  assert(thTab && typeof thTab.onClick === 'function', 'thinking tab button present in the editor')
+  thTab.onClick()
+  const outT = []
+  renderAt(tree, fake, 'root', outT)
+  await new Promise((r) => setTimeout(r, 10))
+  renderAt(tree, fake, 'root', outT)
+  // route-level editor: level / format / budget-field selects + four budget inputs
+  const selects = outT.filter((n) => String(n.className).includes('mpro-select'))
+  assert(selects.length >= 3, `thinking tab renders the route-level selects, got ${selects.length}`)
+  assert(outT.some((n) => String(n.className).includes('mpro-inputNum')), 'thinking tab renders budget number inputs')
+  // per-model rows: one card per known model (explicit + catalog + overrides).
+  // NB: every `out*` array receives two render passes (before/after the async
+  // refresh), so exact counts are asserted on the UNIQUE node set.
+  const cards = outT.filter((n) => String(n.className).includes('mpro-thCard'))
+  const cardTexts = new Set(cards.map((n) => n.text))
+  assert(cardTexts.size === 3, `one thinking card per model (deepseek-chat/-reasoner + deepseek-v3), got ${cardTexts.size}: ${JSON.stringify([...cardTexts])}`)
+  // the existing override is shown with its storage home (the test's `t` is the
+  // identity function for non-badge keys, so the rendered copy is the KEY)
+  assert(outT.some((n) => /thinkingStoreOverrides/.test(n.text || '')), 'override storage is labelled')
+  // expand the first model and check the custom-level editor: 7 level rows with a
+  // free-text wire field each, plus preset chips (manual entry + presets).
+  const toggle = outT.find((n) => String(n.className).includes('mpro-thToggle'))
+  assert(toggle && typeof toggle.onClick === 'function', 'model row is expandable')
+  toggle.onClick()
+  const outT2 = []
+  renderAt(tree, fake, 'root', outT2)
+  const customBtn = outT2.find((n) => n.tag === 'button' && /thinkingModeCustom/i.test(n.text || ''))
+  assert(customBtn && typeof customBtn.onClick === 'function', 'custom-levels mode button present')
+  customBtn.onClick()
+  const outT3 = []
+  renderAt(tree, fake, 'root', outT3)
+  const rows = outT3.filter((n) => n.tag === 'tr')
+  assert(rows.length >= 8, `custom mode renders the 7-level table (header + rows), got ${rows.length}`)
+  assert(outT3.some((n) => String(n.className).includes('mpro-thTable')), 'level table renders')
+  const spellingInputs = outT3.filter((n) => n.tag === 'input' && String(n.className).includes('mpro-inputMono'))
+  assert(spellingInputs.length >= 7, `a wire-spelling field per level, got ${spellingInputs.length}`)
+  assert(outT3.some((n) => n.tag === 'button' && String(n.className).includes('mpro-chip')), 'preset chips render per level')
 
-  // positive render: the mocked log entry (sessionId sess-x) sits inside sel.
+  // save the ROUTE settings and assert the RPC payload carries the escalation
+  // level + all four budgets + the compat switches (a true patch).
+  const saveRoute = outT.find((n) => n.tag === 'button' && /thinkingSaveRoute/i.test(n.text || ''))
+  assert(saveRoute && typeof saveRoute.onClick === 'function', 'save-route button present')
+  rpcCalls.length = 0
+  saveRoute.onClick()
+  await new Promise((r) => setTimeout(r, 20))
+  const routeCall = rpcCalls.find((c) => c.method === 'setThinking')
+  assert(routeCall !== undefined, 'save-route issued set-thinking')
+  assert(routeCall.payload.route === 'deepseek', 'set-thinking targets the edited route')
+  assert(routeCall.payload.patch.reasoning === 'high', 'route patch carries the default level: ' + JSON.stringify(routeCall.payload.patch))
+  assert(routeCall.payload.patch.thinkingBudgets.high === 8192, 'route patch carries all four budgets')
+  assert(routeCall.payload.patch.compat.thinkingFormat === 'openrouter', 'route patch carries the compat switches')
+
+  // save the MODEL settings: the payload must be the normalized effort map
+  const saveModel = outT3.find((n) => n.tag === 'button' && /thinkingSaveModel/i.test(n.text || ''))
+  assert(saveModel && typeof saveModel.onClick === 'function', 'save-model button present')
+  rpcCalls.length = 0
+  saveModel.onClick()
+  await new Promise((r) => setTimeout(r, 20))
+  const modelCall = rpcCalls.find((c) => c.method === 'setThinking')
+  assert(modelCall !== undefined, 'save-model issued set-thinking')
+  assert(modelCall.payload.modelId === 'deepseek-chat', 'the edited model id is sent: ' + JSON.stringify(modelCall.payload))
+  assert(modelCall.payload.patch.reasoningEfforts !== undefined, 'model patch carries reasoningEfforts')
+  assert(!Object.hasOwn(modelCall.payload.patch, 'reasoning'), 'model patch carries no route-level field')
+}
+
+// -- OpenRouter tab: provider list, mode, quantization, attribution, status --
+{
+  // The editor replaces the whole page while a provider is selected, so leave it
+  // first: the top-level tabs only exist on the dashboard.
+  const backBtn = outA.find((n) => n.tag === 'button' && /^←\s*back$/i.test((n.text || '').trim()))
+  assert(backBtn && typeof backBtn.onClick === 'function', 'editor back button present')
+  backBtn.onClick()
+  const outDash = []
+  renderAt(tree, fake, 'root', outDash)
+  await new Promise((r) => setTimeout(r, 10))
+  renderAt(tree, fake, 'root', outDash)
+  const orTab = outDash.find((n) => n.tag === 'button' && /tabOpenRouter/i.test(n.text || ''))
+  assert(orTab && typeof orTab.onClick === 'function', 'OpenRouter tab button present')
+  orTab.onClick()
+  const outO2 = []
+  renderAt(tree, fake, 'root', outO2)
+  await new Promise((r) => setTimeout(r, 20))
+  renderAt(tree, fake, 'root', outO2)
+  assert(outO2.some((n) => String(n.className).includes('mpro-orCard')), 'OpenRouter panel renders its card')
+  assert(rpcCalls.some((c) => c.method === 'getOpenRouter'), 'the panel requested get-openrouter on mount')
+  assert(outO2.some((n) => n.tag === 'textarea' && String(n.className).includes('mpro-textarea')), 'provider list textarea renders')
+  const modeSelect = outO2.find((n) => n.tag === 'select' && (n.text || '').includes('orModeOrder'))
+  assert(modeSelect !== undefined, 'mode select renders both options: ' + JSON.stringify(outO2.filter((n) => n.tag === 'select').map((n) => n.text)))
+  const quantSelect = outO2.find((n) => n.tag === 'select' && (n.text || '').includes('orQuantUnlimited'))
+  assert(quantSelect !== undefined, 'quantization select renders the unlimited + level options')
+  assert(outO2.some((n) => (n.text || '').includes('orEnabled')), 'master switch renders')
+  assert(outO2.some((n) => n.tag === 'button' && /orImport/i.test(n.text || '')), 'legacy-import button renders')
+  assert(outO2.some((n) => n.tag === 'button' && /orSelfTest/i.test(n.text || '')), 'self-test button renders')
+  // the status table reports the live shaper + the projection
+  assert(outO2.some((n) => /orShaperLive/i.test(n.text || '')), 'shaper status line renders')
+  assert(outO2.some((n) => /allow_fallbacks/.test(n.text || '')), 'self-test projection (provider params) renders')
+
+  // saving posts the parsed list + mode + quantization as a patch
+  const saveBtn = outO2.find((n) => n.tag === 'button' && /orSave/i.test((n.text || '')))
+  assert(saveBtn !== undefined, 'save button renders')
+  rpcCalls.length = 0
+  saveBtn.onClick()
+  await new Promise((r) => setTimeout(r, 20))
+  const setCall = rpcCalls.find((c) => c.method === 'setOpenRouter')
+  assert(setCall !== undefined, 'save issued set-openrouter')
+  assert(Array.isArray(setCall.payload.patch.providers) && setCall.payload.patch.providers[0] === 'DeepInfra',
+    'the patch carries the parsed provider list: ' + JSON.stringify(setCall.payload.patch.providers))
+  assert(setCall.payload.patch.mode === 'only' && setCall.payload.patch.quantization === 'int8', 'the patch carries mode + quantization')
+
+  // the legacy-import button issues import-openrouter
+  const importBtn = outO2.find((n) => n.tag === 'button' && /orImport/i.test(n.text || ''))
+  rpcCalls.length = 0
+  importBtn.onClick()
+  await new Promise((r) => setTimeout(r, 20))
+  assert(rpcCalls.some((c) => c.method === 'importOpenRouter'), 'import button issued import-openrouter')
+
+  // back to the providers list for the remaining assertions
+  const backTab = outO2.find((n) => n.tag === 'button' && /tabProviders/i.test(n.text || ''))
+  assert(backTab && typeof backTab.onClick === 'function', 'providers tab still reachable')
+  backTab.onClick()
+  const outB = []
+  renderAt(tree, fake, 'root', outB)
+  await new Promise((r) => setTimeout(r, 10))
+  renderAt(tree, fake, 'root', outB)
+  assert(outB.some((n) => String(n.className).includes('mpro-pc')), 'the provider rail still renders after visiting the new tabs')
+}
+
+// -- conversation badge (turnTail): DSH 0.2.0-rc.1 declares this seat as a LIST
+// slot, so the entry carries no `select`; the component derives the turn window
+// from the owner Turn itself (selectTurnSelection) and reads turn timings from
+// the chat snapshot hook (`useChat`) --
+{
+  const T = 1700000000000
+  const ownerTurn = { turn: 7, start: { time: T - 5_000 }, end: { time: T } }
+  const sel = badgeMod.selectTurnSelection({ turn: ownerTurn, seq: 42 })
+  assert(sel && typeof sel.from === 'number' && typeof sel.to === 'number' && sel.from < T && sel.to >= T, 'selectTurnSelection derives the turn window: ' + JSON.stringify(sel))
+  assert(sel.turn === 7, 'selectTurnSelection carries the turn number for precise correlation')
+  assert(badgeMod.selectTurnSelection({}) === null, 'selectTurnSelection declines turns without boundaries')
+  assert(badgeMod.selectTurnSelection(null) === null, 'selectTurnSelection declines a missing owner')
+
+  // positive render: OWNER props only — a list seat never supplies `matched`.
+  // The mocked log entry (sessionId sess-x, ts T) sits inside the derived window.
   const badgeOut = []
   fake.rerender = () => {}
-  let btree = badgeSlot.render({ matched: sel, sessionId: 'sess-x' })
+  let btree = badgeSlot.render({ turn: ownerTurn, seq: 42, sessionId: 'sess-x' })
   renderAt(btree, fake, 'badge', badgeOut)
   await new Promise((r) => setTimeout(r, 10))
-  btree = badgeSlot.render({ matched: sel, sessionId: 'sess-x' })
+  btree = badgeSlot.render({ turn: ownerTurn, seq: 42, sessionId: 'sess-x' })
   renderAt(btree, fake, 'badge', badgeOut)
   await new Promise((r) => setTimeout(r, 10))
   assert(badgeOut.some((n) => String(n.className).includes('mpro-badgeRow')), 'badge row renders for a routed turn')
@@ -370,12 +619,12 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   assert(badgeOut.some((n) => String(n.className).includes('mpro-badgeChip') && /deepseek-chat/.test(n.text || '')), 'badge names the serving target: ' + JSON.stringify(badgeOut.filter((n) => String(n.className).includes('mpro-badge')).map((n) => n.text)))
 
   // a turn outside the window renders nothing
-  const far = { from: sel.to + 60_000, to: sel.to + 120_000 }
+  const farTurn = { turn: 9, start: { time: T + 60_000 }, end: { time: T + 120_000 } }
   const badgeOut2 = []
-  let btree2 = badgeSlot.render({ matched: far, sessionId: 'sess-x' })
+  let btree2 = badgeSlot.render({ turn: farTurn, seq: 42, sessionId: 'sess-x' })
   renderAt(btree2, fake, 'badgeFar', badgeOut2)
   await new Promise((r) => setTimeout(r, 10))
-  btree2 = badgeSlot.render({ matched: far, sessionId: 'sess-x' })
+  btree2 = badgeSlot.render({ turn: farTurn, seq: 42, sessionId: 'sess-x' })
   renderAt(btree2, fake, 'badgeFar', badgeOut2)
   await new Promise((r) => setTimeout(r, 10))
   assert(!badgeOut2.some((n) => String(n.className).includes('mpro-badgeRow')), 'badge stays hidden for turns the router did not serve')
@@ -383,16 +632,13 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   // -- precise per-turn attribution: the window must end at the NEXT turn's
   // start, never overlap it. Overlapping ±slack windows were the cause of
   // "有时候有有时候没有" (adjacent turns stealing/dropping each others' logs). --
-  assert(typeof sel.turn === 'number', 'badge select carries the turn number for precise correlation')
 
   // turnTimings: turn 1 starts at T, turn 2 starts at T+30s.
-  const T = 1700000000000
   const timings = new Map([
     [1, { startTime: T, endTime: T + 20_000 }],
     [2, { startTime: T + 30_000, endTime: T + 50_000 }],
   ])
-  const snap = { chat: { turnTimings: timings } }
-  const useSession = (fn) => fn(snap)
+  const snap = { legacy: { turnTimings: timings } }
 
   const k1 = badgeMod.preciseWindowKey(snap, 1)
   const [f1, t1] = k1.split('|').map(Number)
@@ -405,36 +651,37 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
   assert(t2b > T + 50_000, 'latest turn keeps an open-ended window so late logs still land')
   assert(f2 >= t1 - 1_000, 'adjacent turn windows do not overlap materially')
 
-  // The REAL DSH source is snapshot.chat.timeline.turns (turn objects with
-  // start:{time}), not a turnTimings map — reading only the map was why the
-  // precise window silently fell back to the coarse ±slack window on the live
-  // build. This asserts the timeline.turns path works identically.
+  // The REAL 0.2.0-rc.1 source is the CHAT VIEW snapshot the `useChat` seat
+  // hands us: `snapshot.timeline.turns` (turn objects with start:{time}).
+  // Reading only the legacy paths was why the precise window silently fell back
+  // to the coarse ±slack window on the live build.
   const turnsMap = new Map([
     [1, { turn: 1, start: { time: T }, end: { time: T + 20_000 }, status: 'closed' }],
     [2, { turn: 2, start: { time: T + 30_000 }, status: 'open' }],
   ])
-  const snapTimeline = { chat: { timeline: { turns: turnsMap } } }
+  const snapTimeline = { timeline: { turns: turnsMap } }
   const kt1 = badgeMod.preciseWindowKey(snapTimeline, 1)
   const [ft1, tt1] = kt1.split('|').map(Number)
   assert(tt1 === T + 30_000 && ft1 === T - 1_000, 'timeline.turns path yields the same precise window as turnTimings: ' + kt1)
-  // legacy.turnTimings path too.
-  const snapLegacy = { chat: { legacy: { turnTimings: timings } } }
-  assert(badgeMod.preciseWindowKey(snapLegacy, 1) === k1, 'legacy.turnTimings path yields the same precise window')
+  // Older builds nested the same data under `snapshot.chat`; still accepted.
+  assert(badgeMod.preciseWindowKey({ chat: { timeline: { turns: turnsMap } } }, 1) === k1, 'legacy snapshot.chat.timeline.turns path still works')
+  assert(badgeMod.preciseWindowKey({ chat: { legacy: { turnTimings: timings } } }, 1) === k1, 'legacy snapshot.chat.legacy.turnTimings path still works')
+  assert(badgeMod.preciseWindowKey({ chat: { turnTimings: timings } }, 1) === k1, 'legacy snapshot.chat.turnTimings path still works')
 
   assert(badgeMod.preciseWindowKey({}, 1) === '', 'precise window declines a snapshot without any timing source (falls back)')
   assert(badgeMod.preciseWindowKey(snap, 99) === '', 'precise window declines an unknown turn')
   assert(badgeMod.preciseWindowKey(null, 1) === '', 'precise window is throw-free on a missing snapshot')
 
-  // The component must PREFER the precise window over the coarse `matched`:
-  // the mocked log entry sits inside sel, but we pass a precise timeline that
-  // places this turn's window far away — the badge must then stay hidden.
+  // The component must PREFER the precise window over the coarse derived one:
+  // the mocked log entry sits inside the coarse window, but we hand the seat a
+  // chat snapshot placing this turn far away — the badge must then stay hidden.
   const badgeOut3 = []
-  const farTimings = new Map([[sel.turn, { startTime: T + 600_000 }], [sel.turn + 1, { startTime: T + 700_000 }]])
-  const farUseSession = (fn) => fn({ chat: { turnTimings: farTimings } })
-  let btree3 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: farUseSession })
+  const farTurns = new Map([[sel.turn, { turn: sel.turn, start: { time: T + 600_000 } }], [sel.turn + 1, { turn: sel.turn + 1, start: { time: T + 700_000 } }]])
+  const farUseChat = (fn) => fn({ timeline: { turns: farTurns } })
+  let btree3 = badgeSlot.render({ turn: ownerTurn, seq: 42, sessionId: 'sess-x', useChat: farUseChat })
   renderAt(btree3, fake, 'badgePrecise', badgeOut3)
   await new Promise((r) => setTimeout(r, 10))
-  btree3 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: farUseSession })
+  btree3 = badgeSlot.render({ turn: ownerTurn, seq: 42, sessionId: 'sess-x', useChat: farUseChat })
   renderAt(btree3, fake, 'badgePrecise', badgeOut3)
   await new Promise((r) => setTimeout(r, 10))
   assert(!badgeOut3.some((n) => String(n.className).includes('mpro-badgeRow')),
@@ -442,12 +689,12 @@ assert(outA.some((n) => n.tag === 'button' && /addModelBtn/i.test(n.text || ''))
 
   // ...and with a precise window that DOES contain the entry, it renders again.
   const badgeOut4 = []
-  const nearTimings = new Map([[sel.turn, { startTime: sel.from + 4_000 }]])
-  const nearUseSession = (fn) => fn({ chat: { turnTimings: nearTimings } })
-  let btree4 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: nearUseSession })
+  const nearTurns = new Map([[sel.turn, { turn: sel.turn, start: { time: T - 1_000 } }]])
+  const nearUseChat = (fn) => fn({ timeline: { turns: nearTurns } })
+  let btree4 = badgeSlot.render({ turn: ownerTurn, seq: 42, sessionId: 'sess-x', useChat: nearUseChat })
   renderAt(btree4, fake, 'badgeNear', badgeOut4)
   await new Promise((r) => setTimeout(r, 10))
-  btree4 = badgeSlot.render({ matched: sel, sessionId: 'sess-x', useSession: nearUseSession })
+  btree4 = badgeSlot.render({ turn: ownerTurn, seq: 42, sessionId: 'sess-x', useChat: nearUseChat })
   renderAt(btree4, fake, 'badgeNear', badgeOut4)
   await new Promise((r) => setTimeout(r, 10))
   assert(badgeOut4.some((n) => String(n.className).includes('mpro-badgeRow')),

@@ -1,4 +1,4 @@
-/** CSS styles for the redesigned Model Pro settings page.
+/** CSS styles for the redesigned Model Ultra settings page.
  * Built on DSW alias tokens so it lives cleanly inside the DSH settings app.
  * Visual system: state-led rail cards (left rail encodes lifecycle), a soft
  * segmented filter bar, mono type for anything the machine reads (route /
@@ -256,6 +256,29 @@ export const CSS = [
   '.mpro-badgeChipRoute{border-style:dashed;color:var(--dsw-alias-brand-primary)}',
   '.mpro-badgeFb{color:var(--dsw-alias-state-success-primary);font-weight:600}',
   '.mpro-badgeFbText{font-size:10.5px;color:var(--dsw-alias-state-success-primary)}',
+
+  // ---------- thinking effort ----------
+  '.mpro-subTitle{font-size:12.5px;font-weight:600;color:var(--dsw-alias-label-primary);margin:0 0 8px}',
+  '.mpro-label{font-size:11.5px;color:var(--dsw-alias-label-secondary);font-weight:500}',
+  '.mpro-check{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;white-space:nowrap}',
+  '.mpro-inputNum{width:74px;flex:0 0 auto}',
+  '.mpro-textarea{height:auto;min-height:110px;padding:8px 10px;line-height:1.55;resize:vertical}',
+  '.mpro-thList{display:flex;flex-direction:column;gap:8px}',
+  '.mpro-thCard{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}',
+  '.mpro-thHead{display:flex;align-items:center;gap:10px;padding:8px 10px;flex-wrap:wrap}',
+  '.mpro-thToggle{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;cursor:pointer;color:var(--dsw-alias-label-primary);font-size:12.5px;font-family:inherit;min-width:0}',
+  '.mpro-thName{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}',
+  '.mpro-thId{font-family:var(--mpro-monospace);font-size:11px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}',
+  '.mpro-thSummary{flex:1;font-size:11px;color:var(--dsw-alias-label-tertiary);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+  '.mpro-thBody{padding:10px;border-top:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:10px;background:var(--dsw-alias-bg-base)}',
+  '.mpro-thPresets{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+  '.mpro-thTable{width:100%;border-collapse:collapse;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+  '.mpro-thTable th{text-align:left;font-weight:500;font-size:11px;color:var(--dsw-alias-label-tertiary);padding:4px 6px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+  '.mpro-thTable td{padding:4px 6px;vertical-align:middle}',
+  '.mpro-thTable td .mpro-input{height:28px}',
+
+  // ---------- OpenRouter provider routing ----------
+  '.mpro-orCard{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);padding:12px;display:flex;flex-direction:column;gap:10px}',
 
   // ---------- responsive & motion ----------
   '@media(max-width:640px){.mpro-grid2,.mpro-overviewGrid,.mpro-testRow{grid-template-columns:1fr}.mpro-hdrRow{grid-template-columns:120px 1fr 28px}.mpro-pc{flex-wrap:wrap}.mpro-pcActions{width:100%;justify-content:flex-start}}',
