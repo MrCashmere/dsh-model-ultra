@@ -14,6 +14,10 @@
 - docs: 页首说明与 README 增补档位如何从 `reasoningEfforts` 流到选择器（`resolveModelReasoning` →
   `PiAiAdapter.modelInfo` → `session/modelCatalog` → Effort 一栏）、三条硬规则，以及「改完即生效、无需重启」。
 - test: 客户端冒烟新增大纲断言（说明区块、逐模型预览、无档位告警、预设提示）。
+- fix(build): `scripts/build.mjs` 在 esbuild 服务进程被拒（受限环境下的 `spawn EPERM`）时回退到平台二进制直连构建，
+  使 `npm run build` / `prepare` / `prepublishOnly` 在受限沙箱与硬化容器里同样可用；回退路径会把中间产物
+  `dist/client.raw.js` 删掉，避免它被 `files: ["dist"]` 一起打进发布包。
+- chore: 发布包纳入 `CHANGELOG.md`（`files` 白名单），本地 `npm pack` 产物 `*.tgz` 加入 `.gitignore`。
 
 ## 2.0.0 — 2026-09-29
 
