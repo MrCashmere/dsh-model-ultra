@@ -1,7 +1,13 @@
 # dsh-model-ultra · 模型 Ultra
 
+[![npm version](https://img.shields.io/npm/v/dsh-model-ultra.svg)](https://www.npmjs.com/package/dsh-model-ultra)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-model-ultra.svg)](https://www.npmjs.com/package/dsh-model-ultra)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.1-blue.svg)](https://github.com/deepseek-ai/dsh)
+
+> **npm**：[`dsh-model-ultra`](https://www.npmjs.com/package/dsh-model-ultra) ·
+> **源码**：[github.com/MrCashmere/dsh-model-ultra](https://github.com/MrCashmere/dsh-model-ultra)
+> （`npm i dsh-model-ultra`，或用 DSH 插件页/CLI 直接安装 → [安装](#安装)）
 
 面向 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/dsh) 的**静态 bundle 插件**：在设置页新增一个「**模型 Ultra**」入口，为 `llm-pi-ai` 提供商提供**全生命周期管理 UI** —— 新建 / 编辑 / 删除、启用 / 禁用、远端模型发现、连通性测试、**逐模型思考强度**、**OpenRouter 提供商路由**、智能路由、组合提供商、观测与探活；并在插件被卸载或禁用时**把数据原样还回去（零丢失）**。
 
@@ -116,30 +122,52 @@
 
 ## 安装
 
-### Desktop（桌面应用）
+npm 包页：**<https://www.npmjs.com/package/dsh-model-ultra>**（`npm view dsh-model-ultra version` 可查最新版）
 
-在应用内打开 **设置 → 插件 → 安装**，填写**本地绝对路径**或 npm 包名：
+### 方式一：npm 安装（推荐）
+
+**Desktop（桌面应用）** —— 打开 **设置 → 插件 → 安装**，填 npm 包名：
 
 ```text
-D:\path\to\dsh-model-ultra          # 本地路径（link 安装，改代码重建后重启即生效）
-dsh-model-ultra                     # npm 包名（发布后可用）
+dsh-model-ultra
 ```
 
-安装后**重启应用**（Host 半在启动时加载）。Desktop 的 Profile 形如 `$DSH_HOME/profiles/desktop`（`DSH_HOME` 默认为 `~/.dsh`），安装成功即：
+**Web（CLI / Web GUI）**：
+
+```sh
+dsh plugin --profile web add npm:dsh-model-ultra
+```
+
+**直接装进某个项目**（当依赖用，比如自己组合插件）：
+
+```sh
+npm install dsh-model-ultra
+# 或从本地 tarball 离线安装
+npm install ./dsh-model-ultra-2.0.1.tgz
+```
+
+安装后**重启应用**（Host 半只在启动时加载；Web 端同理重启 `dsh web` 进程）。安装成功即：
 
 ```jsonc
 // $DSH_HOME/profiles/desktop/package.json
-"dependencies":      { "dsh-model-ultra": "link:D:/path/to/dsh-model-ultra" },
+"dependencies":      { "dsh-model-ultra": "^2.0.1" },
 "dsh": { "profile": { "bundles": [ …, "dsh-model-ultra" ] } }
 ```
 
-### Web（CLI / Web GUI）
+### 方式二：本地路径 / 源码软链（开发联调）
+
+改代码后重建即可生效，无需发版：
+
+```text
+D:\path\to\dsh-model-ultra          # 插件页填本地绝对路径（link 安装，重建后重启即生效）
+```
 
 ```sh
-dsh plugin --profile web add npm:dsh-model-ultra                  # npm（发布后）
-dsh plugin --profile web add file:D:\path\to\dsh-model-ultra      # 本地路径
+dsh plugin --profile web add file:D:\path\to\dsh-model-ultra      # Web：本地路径
 node scripts/install-local.mjs                                    # 源码软链（开发联调）
 ```
+
+link 安装时 Profile 里写的是 `"dsh-model-ultra": "link:D:/path/to/dsh-model-ultra"`。
 
 ### 从源码构建
 
@@ -149,7 +177,7 @@ npm run build       # dist/host.js（ESM）+ dist/client.js（__ModuleLoader__ �
 npm test            # host + client 冒烟测试
 ```
 
-> `dist/` 在 `.gitignore` 中（属构建产物），但**会随 npm 包发布**；`npm pack` 的内容由 `package.json` 的 `files` 决定：`dist/`、`locale/`、`icon.svg`、`cordis.patch.yml`、`README.md`、`LICENSE`。
+> `dist/` 在 `.gitignore` 中（属构建产物），但**会随 npm 包发布**；`npm pack` 的内容由 `package.json` 的 `files` 决定：`dist/`、`locale/`、`icon.svg`、`cordis.patch.yml`、`README.md`、`CHANGELOG.md`、`LICENSE`。
 
 ### 卸载
 
