@@ -2,6 +2,14 @@ node_modules/
 *.log
 .DS_Store
 .env
+.env.*
+
+# Never commit credentials: a project-local .npmrc can carry an npm publish
+# token (`//registry.npmjs.org/:_authToken=…`). Keep it in ~/.npmrc instead.
+.npmrc
+.netrc
+*.pem
+*.key
 
 # Release tarball produced by `npm pack` (CI builds and uploads its own)
 *.tgz
