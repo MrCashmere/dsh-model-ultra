@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-ultra",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Model Ultra — DSH plugin for llm-pi-ai provider lifecycle: create/edit, custom headers, enable/disable with uninstall-restore safety, per-model thinking effort, OpenRouter provider routing, smart routing, composites, observability, and per-model connectivity tests",
   "type": "module",
   "main": "dist/host.js",
@@ -59,10 +59,12 @@
     "LICENSE"
   ],
   "peerDependencies": {
-    "@deepseek-ai/dsh-typert-protocol": "^0.2.0-rc.1"
+    "@deepseek-ai/dsh-typert-protocol": "^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-typert-protocol": "^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4",
     "@types/node": "^20",
     "@types/react": "^18",
     "esbuild": "^0.25.0",
@@ -84,7 +86,6 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.4",
     "@noble/ciphers": "^2.3.0"
   }
 }

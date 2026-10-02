@@ -143,14 +143,14 @@ dsh plugin --profile web add npm:dsh-model-ultra
 ```sh
 npm install dsh-model-ultra
 # 或从本地 tarball 离线安装
-npm install ./dsh-model-ultra-2.0.1.tgz
+npm install ./dsh-model-ultra-2.0.2.tgz
 ```
 
 安装后**重启应用**（Host 半只在启动时加载；Web 端同理重启 `dsh web` 进程）。安装成功即：
 
 ```jsonc
 // $DSH_HOME/profiles/desktop/package.json
-"dependencies":      { "dsh-model-ultra": "^2.0.1" },
+"dependencies":      { "dsh-model-ultra": "^2.0.2" },
 "dsh": { "profile": { "bundles": [ …, "dsh-model-ultra" ] } }
 ```
 
@@ -388,7 +388,7 @@ npm test            # tests/host.smoke.mjs + tests/client.smoke.mjs
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **2.0.1**。
+见 [CHANGELOG.md](CHANGELOG.md)。当前版本 **2.0.2**。
 
 ## 致谢与许可
 

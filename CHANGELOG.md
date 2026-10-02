@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.2 — 2026-10-02
+
+**修复：`link:` 安装（插件页安装 / 本地链接）时插件在 DSH 0.2.0-rc.2 上完全不显示。**
+
+- fix(manifest): `@deepseek-ai/schemastery` 由 `dependencies` 移到 **`peerDependencies`**（`devDependencies`
+  保留一份用于本地构建/类型检查）。Host 半的 `dist/host.js` 把它作为外部依赖保留，而 DSH 对
+  **linked root** 形式的 profile 插件只在「导入方自己的 `package.json` 把该名字声明为 peer」的
+  `node_modules` 位置上做运行时重定向（`packages/boot/app-boot/src/profile-resolution/resolver.ts`
+  的 `routeLinked`）。改名前它是普通 dependency，插件目录一旦没有自己的 `node_modules`
+  （`link:` 安装不会装依赖），该 import 就落到 Node 原生解析并抛
+  `ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/schemastery'`。
+- **故障表现**：Host 半 import 失败 → Loader 行没有 fiber → `ClientModuleRegistry` 不生成该客户端行 →
+  设置页里没有「模型 Ultra」这一条，**且宿主把该失败写进 stderr 而不显示**（桌面端只缓存 host stderr），
+  所以表现为「静默不显示」。`@deepseek-ai/dsh-typert-protocol` 一直是 peer，所以只有它没出问题。
+- fix: 版本号 2.0.1 → 2.0.2。dist 无需重新构建（只改了清单声明），重新安装或重启 DSH 后生效。
+- test: 新增三个可复跑的验证脚本（见 `DESKTOP-VERIFY.md` §3）：
+  `verify-linked-import.mjs`（用 DSH 自己的 `PluginPackages` 拦截 + 真实 ESM import 对比修复前后）、
+  `verify-linked-peer-routing.mjs`（断言「Host 束里每个 `@deepseek-ai/*` 外部名都必须是声明的 peer」）、
+  `verify-plugin-native-resolution.mjs`（证明插件目录下原生 ESM 解析失败，即必须依赖 DSH 重定向）。
+
 ## 2.0.1 — 2026-09-29
 
 **修复 token 预算输入框排版，并把「思考强度」与聊天框自带模型选择器的关系说清楚。**
